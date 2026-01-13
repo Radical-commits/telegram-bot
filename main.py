@@ -21,9 +21,10 @@ from dotenv import load_dotenv
 from groq import AsyncGroq, RateLimitError, APIError, APIConnectionError, APITimeoutError
 import httpx
 import ssl
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -337,9 +338,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/mylang - Show your current language preference\n"
         "/help - Show detailed help for all commands\n\n"
         "To get started:\n"
-        "1. Set your language with /setlang (e.g., /setlang spanish)\n"
+        "1. Type /setlang to choose your language with buttons 🔘\n"
         "2. Send me text or voice messages and I'll translate them!\n\n"
-        "Use /setlang help to see all supported languages."
+        "Tip: You can also type /setlang spanish to set a language directly."
     )
 
     await update.message.reply_text(welcome_message)
@@ -351,11 +352,35 @@ async def setlang_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # Check if language argument was provided
     if not context.args:
+        # Show inline keyboard with language options
+        keyboard = []
+
+        # Create buttons in rows of 2
+        languages_sorted = sorted(SUPPORTED_LANGUAGES.items())
+        for i in range(0, len(languages_sorted), 2):
+            row = []
+            for lang_name, lang_code in languages_sorted[i:i+2]:
+                # Use flag emojis for popular languages
+                flag_emojis = {
+                    "english": "🇬🇧", "spanish": "🇪🇸", "french": "🇫🇷",
+                    "german": "🇩🇪", "italian": "🇮🇹", "portuguese": "🇵🇹",
+                    "russian": "🇷🇺", "chinese": "🇨🇳", "japanese": "🇯🇵",
+                    "korean": "🇰🇷", "arabic": "🇸🇦", "hindi": "🇮🇳"
+                }
+                flag = flag_emojis.get(lang_name, "🌐")
+                button_text = f"{flag} {lang_name.capitalize()}"
+                row.append(InlineKeyboardButton(button_text, callback_data=f"lang_{lang_code}"))
+            keyboard.append(row)
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
         await update.message.reply_text(
-            "Please specify a language.\n\n"
-            "Usage: /setlang <language>\n"
-            "Example: /setlang spanish\n\n"
-            "Use /setlang help to see all supported languages."
+            "🌍 *Select your preferred language:*\n\n"
+            "Choose from the buttons below, or use:\n"
+            "`/setlang <language>`\n\n"
+            "Example: `/setlang spanish`",
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
         )
         return
 
@@ -408,11 +433,62 @@ async def mylang_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
     else:
         logger.info(f"User {user_id} checked language but none is set")
+
+        # Show inline keyboard for language selection
+        keyboard = []
+        languages_sorted = sorted(SUPPORTED_LANGUAGES.items())
+        for i in range(0, len(languages_sorted), 2):
+            row = []
+            for lang_name, lang_code in languages_sorted[i:i+2]:
+                flag_emojis = {
+                    "english": "🇬🇧", "spanish": "🇪🇸", "french": "🇫🇷",
+                    "german": "🇩🇪", "italian": "🇮🇹", "portuguese": "🇵🇹",
+                    "russian": "🇷🇺", "chinese": "🇨🇳", "japanese": "🇯🇵",
+                    "korean": "🇰🇷", "arabic": "🇸🇦", "hindi": "🇮🇳"
+                }
+                flag = flag_emojis.get(lang_name, "🌐")
+                button_text = f"{flag} {lang_name.capitalize()}"
+                row.append(InlineKeyboardButton(button_text, callback_data=f"lang_{lang_code}"))
+            keyboard.append(row)
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
         await update.message.reply_text(
             "You haven't set a language preference yet.\n\n"
-            "Use /setlang <language> to set your preferred language.\n"
-            "Example: /setlang english\n\n"
-            "Use /setlang help to see all supported languages."
+            "🌍 *Select your language:*",
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+
+
+async def language_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline keyboard button presses for language selection."""
+    query = update.callback_query
+    await query.answer()  # Acknowledge the button press
+
+    user_id = update.effective_user.id
+    callback_data = query.data
+
+    # Extract language code from callback data (format: lang_en, lang_es, etc.)
+    if callback_data.startswith("lang_"):
+        language_code = callback_data[5:]  # Remove "lang_" prefix
+
+        # Find the language name
+        language_name = next(
+            (name for name, code in SUPPORTED_LANGUAGES.items() if code == language_code),
+            "Unknown"
+        )
+
+        # Save user preference
+        user_preferences[user_id] = language_code
+        logger.info(f"User {user_id} set language to {language_code} via button")
+
+        # Update the message to show confirmation
+        await query.edit_message_text(
+            f"✅ *Language set to {language_name.capitalize()} ({language_code})*\n\n"
+            "Now send me any text message and I'll translate it for you!\n\n"
+            "Use /setlang to change your language anytime.",
+            parse_mode="Markdown"
         )
 
 
@@ -428,10 +504,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/start\n"
         "Show welcome message and basic information.\n\n"
 
-        "/setlang <language>\n"
+        "/setlang [language]\n"
         "Set your preferred translation language.\n"
-        "Example: /setlang spanish\n"
-        "Use /setlang help to see all supported languages.\n\n"
+        "• Just type /setlang to see language buttons 🔘\n"
+        "• Or use: /setlang spanish\n"
+        "• Use /setlang help to see all supported languages.\n\n"
 
         "/mylang\n"
         "Display your current language preference.\n"
@@ -719,6 +796,9 @@ def main() -> None:
         application.add_handler(CommandHandler("setlang", setlang_command))
         application.add_handler(CommandHandler("mylang", mylang_command))
         application.add_handler(CommandHandler("help", help_command))
+
+        # Register callback handler for inline keyboard buttons
+        application.add_handler(CallbackQueryHandler(language_button_callback))
 
         # Register message handlers
         # Voice messages are handled first (before text handler)
