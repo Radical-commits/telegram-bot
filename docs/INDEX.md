@@ -40,6 +40,7 @@ This directory contains all project documentation for the Telegram Translation B
 ## 🔧 Technical Documentation
 
 - **[IMPLEMENTATION_SUMMARY.md](./IMPLEMENTATION_SUMMARY.md)** - Technical implementation details (6.6KB)
+- **[INLINE_KEYBOARD_FEATURE.md](./INLINE_KEYBOARD_FEATURE.md)** - Interactive button-based language selection (NEW)
 
 ---
 
