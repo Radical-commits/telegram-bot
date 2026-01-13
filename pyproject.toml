@@ -1,0 +1,11 @@
+[project]
+name = "telegram-translation-bot"
+version = "0.3.0"
+description = "A Telegram bot for translation with Groq API (Phase 3: Voice Support)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "python-telegram-bot>=20.0",
+    "python-dotenv>=1.0.0",
+    "groq>=0.4.0",
+]
