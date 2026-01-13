@@ -19,6 +19,8 @@ from typing import Callable, Dict, Optional
 
 from dotenv import load_dotenv
 from groq import AsyncGroq, RateLimitError, APIError, APIConnectionError, APITimeoutError
+import httpx
+import ssl
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -691,8 +693,21 @@ def main() -> None:
 
     try:
         # Initialize Groq client
-        groq_client = AsyncGroq(api_key=groq_api_key)
-        logger.info("Groq client initialized successfully")
+        # Check if SSL verification should be disabled (for testing in corporate networks)
+        disable_ssl = os.getenv("DISABLE_SSL_VERIFY", "false").lower() == "true"
+
+        if disable_ssl:
+            logger.warning("⚠️  SSL verification is DISABLED - only use for testing!")
+            # Create custom httpx client with SSL verification disabled
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            http_client = httpx.AsyncClient(verify=ssl_context)
+            groq_client = AsyncGroq(api_key=groq_api_key, http_client=http_client)
+            logger.info("Groq client initialized (SSL verification disabled)")
+        else:
+            groq_client = AsyncGroq(api_key=groq_api_key)
+            logger.info("Groq client initialized successfully")
 
         # Create the Application
         logger.info("Starting Telegram Translation Bot (Phase 4 - Production Ready)...")
