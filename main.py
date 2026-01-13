@@ -13,10 +13,12 @@ import signal
 import sys
 import tempfile
 import time
+from datetime import datetime
 from functools import wraps
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
+from aiohttp import web
 from dotenv import load_dotenv
 from groq import AsyncGroq, RateLimitError, APIError, APIConnectionError, APITimeoutError
 import httpx
@@ -741,6 +743,53 @@ def shutdown_handler(signum, frame):
     sys.exit(0)
 
 
+# ==============================================================================
+# Health Check Server (keeps Render.com free tier awake)
+# ==============================================================================
+
+# Track bot start time for uptime reporting
+bot_start_time = datetime.now()
+
+async def health_check(request):
+    """Health check endpoint for monitoring and keeping Render awake."""
+    uptime = datetime.now() - bot_start_time
+    uptime_seconds = int(uptime.total_seconds())
+
+    return web.json_response({
+        "status": "ok",
+        "bot": "telegram-translation-bot",
+        "uptime_seconds": uptime_seconds,
+        "uptime": str(uptime).split('.')[0],  # Format: HH:MM:SS
+        "timestamp": datetime.now().isoformat(),
+        "message": "Bot is running"
+    })
+
+async def root_handler(request):
+    """Root endpoint with bot information."""
+    return web.Response(text=(
+        "🤖 Telegram Translation Bot\n"
+        "Status: Running\n"
+        "\n"
+        "Endpoints:\n"
+        "  GET /health - Health check (JSON)\n"
+        "  GET / - This page\n"
+    ))
+
+async def start_health_server(port: int = 8080):
+    """Start the health check HTTP server."""
+    app = web.Application()
+    app.router.add_get('/', root_handler)
+    app.router.add_get('/health', health_check)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+
+    logger.info(f"Health check server started on port {port}")
+    print(f"Health check server: http://0.0.0.0:{port}/health")
+
+
 def main() -> None:
     """Start the bot with production configuration."""
     global groq_client, app_instance
@@ -788,7 +837,16 @@ def main() -> None:
 
         # Create the Application
         logger.info("Starting Telegram Translation Bot (Phase 4 - Production Ready)...")
-        application = Application.builder().token(token).build()
+
+        # Get port for health check server (Render provides PORT env var)
+        port = int(os.getenv("PORT", "8080"))
+
+        # Create application with post_init callback for health server
+        async def post_init_callback(app):
+            """Start health check server after bot initialization."""
+            await start_health_server(port)
+
+        application = Application.builder().token(token).post_init(post_init_callback).build()
         app_instance = application
 
         # Register command handlers
@@ -818,9 +876,11 @@ def main() -> None:
         print(f"  Translation Timeout: {TRANSLATION_TIMEOUT}s")
         print(f"  Transcription Timeout: {TRANSCRIPTION_TIMEOUT}s")
         print(f"  Max Retries: {MAX_RETRIES}")
+        print(f"  Health Check Port: {port}")
         print("="*60)
         print("\nBot is running successfully!")
         print("Send text or voice messages to translate.")
+        print(f"Health check endpoint: http://0.0.0.0:{port}/health")
         print("Press Ctrl+C to stop gracefully.\n")
 
         application.run_polling(allowed_updates=Update.ALL_TYPES)

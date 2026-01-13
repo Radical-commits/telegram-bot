@@ -11,6 +11,7 @@ This directory contains all project documentation for the Telegram Translation B
 
 - **[DEPLOYMENT.md](./DEPLOYMENT.md)** - Complete deployment guide for Render.com (11KB)
 - **[DEPLOYMENT_CHECKLIST.md](./DEPLOYMENT_CHECKLIST.md)** - Pre/post deployment verification checklist (9KB)
+- **[KEEP_AWAKE_GUIDE.md](./KEEP_AWAKE_GUIDE.md)** - Keep bot awake on Render free tier with UptimeRobot (NEW) ⭐
 
 ## 🧪 Testing
 
