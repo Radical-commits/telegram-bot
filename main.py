@@ -1123,10 +1123,23 @@ async def trivia_button_callback(update: Update, context: ContextTypes.DEFAULT_T
 
     game_state = trivia_games[user_id]
 
-    # Parse callback data: trivia_true_0 or trivia_false_0
+    # Parse callback data: trivia_true_0, trivia_false_0, or trivia_next_0
     parts = callback_data.split("_")
-    user_answer = parts[1] == "true"  # true or false
+    action = parts[1]  # "true", "false", or "next"
     question_index = int(parts[2])
+
+    # Handle "next" button press
+    if action == "next":
+        if game_state["current_index"] < len(game_state["questions"]):
+            # More questions to go
+            await send_trivia_question(update, context, user_id)
+        else:
+            # Game over
+            await end_trivia_game(update, context, user_id)
+        return
+
+    # Handle answer buttons (true/false)
+    user_answer = action == "true"
 
     # Verify this is the current question (prevent double-answering)
     if question_index != game_state["current_index"]:
@@ -1167,23 +1180,31 @@ async def trivia_button_callback(update: Update, context: ContextTypes.DEFAULT_T
         f"Счет: {score}/{question_number}"
     )
 
-    # Update the message with result
-    await query.edit_message_text(
-        response_text,
-        parse_mode="Markdown"
-    )
+    # Create "Next" button or "Show Results" button
+    if game_state["current_index"] < total_questions:
+        # More questions to go - show "Next Question" button
+        keyboard = [
+            [InlineKeyboardButton("Следующий вопрос ➡️", callback_data=f"trivia_next_{question_index}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            response_text,
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
+    else:
+        # Last question - show "Show Results" button
+        keyboard = [
+            [InlineKeyboardButton("Показать результаты 🏆", callback_data=f"trivia_next_{question_index}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            response_text,
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
 
     logger.info(f"User {user_id} answered question {question_number}: {'correct' if is_correct else 'wrong'}")
-
-    # Send next question after a brief pause
-    await asyncio.sleep(1.5)
-
-    if game_state["current_index"] < total_questions:
-        # More questions to go
-        await send_trivia_question(update, context, user_id)
-    else:
-        # Game over
-        await end_trivia_game(update, context, user_id)
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
