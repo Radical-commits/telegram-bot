@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 import signal
 import sys
@@ -819,18 +820,41 @@ async def generate_trivia_questions(language_code: str = "en", count: int = 10) 
     try:
         logger.info(f"Generating {count} trivia questions in {language_name}...")
 
-        prompt = f"""Generate exactly {count} weird, surprising, and interesting true-or-false claims about the world.
-Make them fun and engaging! Mix true and false claims (roughly 50/50 split).
-Topics can include: animals, science, history, geography, technology, human body, space, food, etc.
+        # Add timestamp and random elements to make each request unique
+        # Randomize topic focus to get variety
+        topic_pools = [
+            ["animals", "marine life", "insects", "birds", "extinct creatures"],
+            ["physics", "chemistry", "biology", "astronomy", "geology"],
+            ["ancient civilizations", "medieval times", "modern history", "historical figures"],
+            ["countries", "cities", "natural wonders", "oceans", "deserts"],
+            ["inventions", "computers", "space exploration", "engineering"],
+            ["human anatomy", "psychology", "medicine", "genetics"],
+            ["planets", "stars", "black holes", "space phenomena"],
+            ["cuisine", "plants", "beverages", "cooking science"]
+        ]
 
-IMPORTANT: All content must be in {language_name}. The claim, explanation, and ALL text must be written in {language_name}.
+        selected_topics = random.sample(topic_pools, k=3)
+        flat_topics = [topic for sublist in selected_topics for topic in sublist]
+        topics_str = ", ".join(flat_topics)
+
+        # Add uniqueness markers
+        session_id = f"{int(time.time())}{random.randint(1000, 9999)}"
+
+        prompt = f"""Generate exactly {count} UNIQUE, ORIGINAL weird, surprising, and interesting true-or-false claims.
+
+CRITICAL: Generate FRESH and UNCOMMON facts. Avoid popular trivia like "honey never spoils", "octopuses have hearts", "Cleopatra lived closer to", etc. Be creative and dig deeper!
+
+Focus on these topics: {topics_str}
 
 Requirements:
-- Each claim should be clear and specific
+- Mix true and false claims (roughly 50/50 split)
+- Each claim should be clear, specific, and UNCOMMON
 - Avoid controversial or offensive topics
 - Make them surprising or counterintuitive
 - Include a brief (1-2 sentence) explanation for each
-- Write everything in {language_name}
+- Session ID for uniqueness: {session_id}
+
+IMPORTANT: All content must be in {language_name}. The claim, explanation, and ALL text must be written in {language_name}.
 
 Return ONLY a valid JSON array with this exact structure:
 [
