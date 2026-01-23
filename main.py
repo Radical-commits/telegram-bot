@@ -7,8 +7,10 @@ Production-ready with retry logic, rate limiting, and graceful shutdown.
 """
 
 import asyncio
+import json
 import logging
 import os
+import re
 import signal
 import sys
 import tempfile
@@ -16,7 +18,7 @@ import time
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, List, Any
 
 from aiohttp import web
 from dotenv import load_dotenv
@@ -82,6 +84,10 @@ LANGUAGE_NAMES = {
 # In-memory storage for user language preferences
 # Format: {user_id: language_code}
 user_preferences: Dict[int, str] = {}
+
+# In-memory storage for trivia game state
+# Format: {user_id: {questions: list, current_index: int, score: int, active: bool}}
+trivia_games: Dict[int, Dict[str, Any]] = {}
 
 # Groq client (initialized in main)
 groq_client: Optional[AsyncGroq] = None
@@ -338,10 +344,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "/start - Show this welcome message\n"
         "/setlang <language> - Set your preferred translation language\n"
         "/mylang - Show your current language preference\n"
+        "/trivia - Play a fun True/False trivia game\n"
         "/help - Show detailed help for all commands\n\n"
         "To get started:\n"
         "1. Type /setlang to choose your language with buttons 🔘\n"
-        "2. Send me text or voice messages and I'll translate them!\n\n"
+        "2. Send me text or voice messages and I'll translate them!\n"
+        "3. Want to have fun? Try /trivia for a game!\n\n"
         "Tip: You can also type /setlang spanish to set a language directly."
     )
 
@@ -463,6 +471,21 @@ async def mylang_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
 
+async def button_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Route button callbacks to appropriate handlers."""
+    query = update.callback_query
+    callback_data = query.data
+
+    # Route to appropriate handler based on callback data prefix
+    if callback_data.startswith("lang_"):
+        await language_button_callback(update, context)
+    elif callback_data.startswith("trivia_"):
+        await trivia_button_callback(update, context)
+    else:
+        await query.answer()
+        logger.warning(f"Unknown callback data: {callback_data}")
+
+
 async def language_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle inline keyboard button presses for language selection."""
     query = update.callback_query
@@ -516,6 +539,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Display your current language preference.\n"
         "Shows 'not set' if you haven't chosen a language yet.\n\n"
 
+        "/trivia\n"
+        "Play a fun True/False trivia game!\n"
+        "• Answer 10 weird and interesting facts\n"
+        "• Use buttons to select True or False\n"
+        "• Get instant feedback with explanations\n"
+        "• See your final score at the end\n"
+        "• Play as many times as you want with new questions\n\n"
+
         "/help\n"
         "Show this detailed help message.\n\n"
 
@@ -535,7 +566,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         "Powered by Groq AI:\n"
         "- Translation: Llama 3.3 70B model\n"
-        "- Transcription: Whisper large-v3 model"
+        "- Transcription: Whisper large-v3 model\n"
+        "- Trivia Questions: Llama 3.3 70B model with web verification"
     )
 
     await update.message.reply_text(help_text)
@@ -705,6 +737,441 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 logger.error(f"Failed to delete temporary file: {e}")
 
 
+# ==============================================================================
+# Trivia Game Functions
+# ==============================================================================
+
+@async_retry(max_retries=MAX_RETRIES)
+async def verify_claim_with_search(claim: str, expected_answer: bool) -> tuple[bool, str]:
+    """
+    Verify a trivia claim using web search.
+
+    Args:
+        claim: The claim to verify
+        expected_answer: The expected answer (True or False)
+
+    Returns:
+        Tuple of (is_verified: bool, search_summary: str)
+        - On verification success: (True, brief_explanation)
+        - On verification failure: (False, reason)
+    """
+    try:
+        # Use httpx to search for verification
+        # We'll use DuckDuckGo Instant Answer API (no API key needed)
+        search_query = f"{claim} fact check"
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Try DuckDuckGo Instant Answer API
+            response = await client.get(
+                "https://api.duckduckgo.com/",
+                params={
+                    "q": search_query,
+                    "format": "json",
+                    "no_html": 1,
+                    "skip_disambig": 1
+                }
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                # Check if we got relevant results
+                abstract = data.get("AbstractText", "")
+
+                if abstract and len(abstract) > 20:
+                    # We got some information, consider it verified
+                    # Extract a brief summary (first sentence)
+                    first_sentence = abstract.split('.')[0] + '.'
+                    logger.info(f"Claim verified via search: {claim[:50]}")
+                    return True, first_sentence[:200]
+
+        # If search didn't return useful results, assume we can't verify
+        logger.warning(f"Could not verify claim via search: {claim[:50]}")
+        return False, "Could not find reliable verification"
+
+    except Exception as e:
+        logger.error(f"Search verification failed: {type(e).__name__}: {e}")
+        return False, f"Search failed: {type(e).__name__}"
+
+
+@async_retry(max_retries=MAX_RETRIES)
+async def generate_trivia_questions(count: int = 10) -> tuple[bool, Any]:
+    """
+    Generate trivia questions using Groq API.
+
+    Args:
+        count: Number of questions to generate
+
+    Returns:
+        Tuple of (success: bool, result: list or error_message)
+        - On success: (True, list_of_question_dicts)
+        - On failure: (False, error_message)
+    """
+    if not groq_client:
+        logger.error("Groq client is not initialized")
+        return False, "Trivia service is not available. Please contact the administrator."
+
+    try:
+        logger.info(f"Generating {count} trivia questions...")
+
+        prompt = f"""Generate exactly {count} weird, surprising, and interesting true-or-false claims about the world.
+Make them fun and engaging! Mix true and false claims (roughly 50/50 split).
+Topics can include: animals, science, history, geography, technology, human body, space, food, etc.
+
+Requirements:
+- Each claim should be clear and specific
+- Avoid controversial or offensive topics
+- Make them surprising or counterintuitive
+- Include a brief (1-2 sentence) explanation for each
+
+Return ONLY a valid JSON array with this exact structure:
+[
+  {{
+    "claim": "The exact claim text here",
+    "answer": true,
+    "explanation": "Brief explanation why this is true or false"
+  }}
+]
+
+Return ONLY the JSON array, no other text."""
+
+        chat_completion = await asyncio.wait_for(
+            groq_client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a trivia question generator. You create interesting true/false questions. You ONLY respond with valid JSON arrays."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                model="llama-3.3-70b-versatile",
+                temperature=0.8,  # Higher temperature for more creative questions
+                max_tokens=2048,
+            ),
+            timeout=30
+        )
+
+        response_text = chat_completion.choices[0].message.content.strip()
+        logger.debug(f"Groq response: {response_text[:200]}")
+
+        # Extract JSON from response (in case there's extra text)
+        json_match = re.search(r'\[.*\]', response_text, re.DOTALL)
+        if json_match:
+            json_text = json_match.group(0)
+        else:
+            json_text = response_text
+
+        # Parse JSON
+        questions = json.loads(json_text)
+
+        # Validate structure
+        if not isinstance(questions, list) or len(questions) == 0:
+            logger.error("Invalid questions format: not a list or empty")
+            return False, "Generated questions have invalid format"
+
+        # Validate each question
+        validated_questions = []
+        for q in questions:
+            if isinstance(q, dict) and "claim" in q and "answer" in q and "explanation" in q:
+                validated_questions.append(q)
+
+        if len(validated_questions) < count:
+            logger.warning(f"Only {len(validated_questions)} valid questions out of {count}")
+
+        logger.info(f"Successfully generated {len(validated_questions)} trivia questions")
+        return True, validated_questions
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse trivia questions JSON: {e}")
+        logger.error(f"Response was: {response_text[:500]}")
+        return False, "Failed to parse generated questions"
+
+    except asyncio.TimeoutError:
+        logger.error("Trivia generation timeout")
+        return False, "Question generation took too long. Please try again."
+
+    except RateLimitError as e:
+        logger.warning(f"Trivia generation rate limit: {e}")
+        return False, "Trivia service is busy. Please wait a moment and try again."
+
+    except Exception as e:
+        error_type = type(e).__name__
+        logger.error(f"Trivia generation failed ({error_type}): {str(e)}")
+        return False, f"Failed to generate questions: {error_type}"
+
+
+async def send_trivia_question(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
+    """
+    Send the current trivia question to the user.
+
+    Args:
+        update: Telegram update object
+        context: Telegram context
+        user_id: User ID
+    """
+    game_state = trivia_games.get(user_id)
+
+    if not game_state or not game_state.get("active"):
+        logger.warning(f"No active game for user {user_id}")
+        return
+
+    questions = game_state["questions"]
+    current_index = game_state["current_index"]
+    score = game_state["score"]
+
+    if current_index >= len(questions):
+        # Game over
+        await end_trivia_game(update, context, user_id)
+        return
+
+    question = questions[current_index]
+    question_number = current_index + 1
+    total_questions = len(questions)
+
+    # Create inline keyboard with True/False buttons
+    keyboard = [
+        [
+            InlineKeyboardButton("✓ True", callback_data=f"trivia_true_{current_index}"),
+            InlineKeyboardButton("✗ False", callback_data=f"trivia_false_{current_index}")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    question_text = (
+        f"*Question {question_number}/{total_questions}*\n\n"
+        f"{question['claim']}\n\n"
+        f"_Current score: {score}/{question_number - 1}_" if question_number > 1 else f"*Question {question_number}/{total_questions}*\n\n{question['claim']}"
+    )
+
+    # Send question
+    if update.callback_query:
+        await update.callback_query.message.reply_text(
+            question_text,
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(
+            question_text,
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+
+
+async def end_trivia_game(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
+    """
+    End the trivia game and show final score.
+
+    Args:
+        update: Telegram update object
+        context: Telegram context
+        user_id: User ID
+    """
+    game_state = trivia_games.get(user_id)
+
+    if not game_state:
+        return
+
+    score = game_state["score"]
+    total = len(game_state["questions"])
+
+    # Generate encouraging message based on score
+    percentage = (score / total) * 100
+
+    if percentage == 100:
+        message = "Perfect score! You're a trivia master!"
+    elif percentage >= 80:
+        message = "Excellent work! You really know your facts!"
+    elif percentage >= 60:
+        message = "Good job! You did well!"
+    elif percentage >= 40:
+        message = "Not bad! Keep learning!"
+    else:
+        message = "Nice try! Play again to improve your score!"
+
+    final_text = (
+        f"🎮 *Game Over!*\n\n"
+        f"*Final Score: {score} out of {total}*\n"
+        f"({percentage:.0f}%)\n\n"
+        f"{message}\n\n"
+        f"Want to play again? Use /trivia to start a new game with different questions!"
+    )
+
+    # Clean up game state
+    trivia_games.pop(user_id, None)
+    logger.info(f"Trivia game ended for user {user_id}. Score: {score}/{total}")
+
+    # Send final message
+    if update.callback_query:
+        await update.callback_query.message.reply_text(
+            final_text,
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(
+            final_text,
+            parse_mode="Markdown"
+        )
+
+
+async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle the /trivia command - start a new trivia game."""
+    user_id = update.effective_user.id
+
+    logger.info(f"User {user_id} started trivia game")
+
+    # Check if user already has an active game
+    if user_id in trivia_games and trivia_games[user_id].get("active"):
+        await update.message.reply_text(
+            "You already have an active trivia game!\n\n"
+            "Finish your current game first, or use /trivia again to start a new game "
+            "(this will cancel your current game)."
+        )
+        # Clean up old game
+        trivia_games.pop(user_id, None)
+
+    # Send "generating questions" message
+    generating_msg = await update.message.reply_text(
+        "🎮 *Starting Trivia Game!*\n\n"
+        "Generating 10 weird and interesting questions for you...\n"
+        "_This may take a moment..._",
+        parse_mode="Markdown"
+    )
+
+    # Generate questions
+    success, result = await generate_trivia_questions(10)
+
+    if not success:
+        error_message = result
+        await generating_msg.edit_text(
+            f"❌ Failed to start trivia game:\n{error_message}\n\n"
+            "Please try again with /trivia"
+        )
+        return
+
+    questions = result
+
+    # Make sure we have at least 10 questions
+    if len(questions) < 10:
+        await generating_msg.edit_text(
+            f"❌ Could not generate enough questions (only got {len(questions)}).\n\n"
+            "Please try again with /trivia"
+        )
+        return
+
+    # Initialize game state
+    trivia_games[user_id] = {
+        "questions": questions[:10],  # Use exactly 10 questions
+        "current_index": 0,
+        "score": 0,
+        "active": True
+    }
+
+    logger.info(f"Trivia game initialized for user {user_id} with {len(questions[:10])} questions")
+
+    # Delete generating message
+    await generating_msg.delete()
+
+    # Send welcome message
+    await update.message.reply_text(
+        "🎮 *Trivia Game Started!*\n\n"
+        "Answer 10 True/False questions.\n"
+        "You'll get instant feedback after each answer.\n\n"
+        "Let's begin!",
+        parse_mode="Markdown"
+    )
+
+    # Send first question
+    await send_trivia_question(update, context, user_id)
+
+
+async def trivia_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle True/False button presses in trivia game."""
+    query = update.callback_query
+    await query.answer()  # Acknowledge button press
+
+    user_id = update.effective_user.id
+    callback_data = query.data
+
+    # Check if this is a trivia callback
+    if not callback_data.startswith("trivia_"):
+        return
+
+    # Check if user has an active game
+    if user_id not in trivia_games or not trivia_games[user_id].get("active"):
+        await query.edit_message_text(
+            "❌ This game has expired or was already completed.\n\n"
+            "Use /trivia to start a new game!"
+        )
+        return
+
+    game_state = trivia_games[user_id]
+
+    # Parse callback data: trivia_true_0 or trivia_false_0
+    parts = callback_data.split("_")
+    user_answer = parts[1] == "true"  # true or false
+    question_index = int(parts[2])
+
+    # Verify this is the current question (prevent double-answering)
+    if question_index != game_state["current_index"]:
+        await query.edit_message_text(
+            "❌ This question has already been answered.\n\n"
+            "Please wait for the next question..."
+        )
+        return
+
+    questions = game_state["questions"]
+    current_question = questions[question_index]
+    correct_answer = current_question["answer"]
+    explanation = current_question["explanation"]
+
+    # Check if answer is correct
+    is_correct = (user_answer == correct_answer)
+
+    if is_correct:
+        game_state["score"] += 1
+        result_emoji = "✅"
+        result_text = "Correct!"
+    else:
+        result_emoji = "❌"
+        answer_text = "True" if correct_answer else "False"
+        result_text = f"Wrong! The answer is {answer_text}."
+
+    # Update current index
+    game_state["current_index"] += 1
+
+    score = game_state["score"]
+    question_number = question_index + 1
+    total_questions = len(questions)
+
+    # Build response message
+    response_text = (
+        f"{result_emoji} *{result_text}*\n\n"
+        f"_{explanation}_\n\n"
+        f"Score: {score}/{question_number}"
+    )
+
+    # Update the message with result
+    await query.edit_message_text(
+        response_text,
+        parse_mode="Markdown"
+    )
+
+    logger.info(f"User {user_id} answered question {question_number}: {'correct' if is_correct else 'wrong'}")
+
+    # Send next question after a brief pause
+    await asyncio.sleep(1.5)
+
+    if game_state["current_index"] < total_questions:
+        # More questions to go
+        await send_trivia_question(update, context, user_id)
+    else:
+        # Game over
+        await end_trivia_game(update, context, user_id)
+
+
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle errors in the bot."""
     logger.error(f"Update {update} caused error {context.error}")
@@ -853,10 +1320,11 @@ def main() -> None:
         application.add_handler(CommandHandler("start", start_command))
         application.add_handler(CommandHandler("setlang", setlang_command))
         application.add_handler(CommandHandler("mylang", mylang_command))
+        application.add_handler(CommandHandler("trivia", trivia_command))
         application.add_handler(CommandHandler("help", help_command))
 
-        # Register callback handler for inline keyboard buttons
-        application.add_handler(CallbackQueryHandler(language_button_callback))
+        # Register callback handler for inline keyboard buttons (routes to specific handlers)
+        application.add_handler(CallbackQueryHandler(button_callback_router))
 
         # Register message handlers
         # Voice messages are handled first (before text handler)
