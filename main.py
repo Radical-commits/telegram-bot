@@ -337,20 +337,20 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.info(f"User {user_id} started the bot")
 
     welcome_message = (
-        f"Hello {user.first_name}!\n\n"
-        "I'm a translation bot powered by Groq AI. I can translate your text messages "
-        "and transcribe voice messages to any language you prefer.\n\n"
-        "Available commands:\n"
-        "/start - Show this welcome message\n"
-        "/setlang <language> - Set your preferred translation language\n"
-        "/mylang - Show your current language preference\n"
-        "/trivia - Play a fun True/False trivia game\n"
-        "/help - Show detailed help for all commands\n\n"
-        "To get started:\n"
-        "1. Type /setlang to choose your language with buttons 🔘\n"
-        "2. Send me text or voice messages and I'll translate them!\n"
-        "3. Want to have fun? Try /trivia for a game!\n\n"
-        "Tip: You can also type /setlang spanish to set a language directly."
+        f"Привет, {user.first_name}!\n\n"
+        "Я бот-переводчик на основе Groq AI. Я могу переводить текстовые сообщения "
+        "и расшифровывать голосовые сообщения на любой выбранный вами язык.\n\n"
+        "Доступные команды:\n"
+        "/start - Показать это приветственное сообщение\n"
+        "/setlang <язык> - Установить предпочитаемый язык перевода\n"
+        "/mylang - Показать текущий выбранный язык\n"
+        "/trivia - Сыграть в увлекательную игру Правда/Ложь\n"
+        "/help - Показать подробную справку по всем командам\n\n"
+        "Чтобы начать:\n"
+        "1. Введите /setlang, чтобы выбрать язык с помощью кнопок 🔘\n"
+        "2. Отправьте мне текстовое или голосовое сообщение, и я переведу его!\n"
+        "3. Хотите развлечься? Попробуйте /trivia для игры!\n\n"
+        "Совет: Вы также можете ввести /setlang spanish, чтобы установить язык напрямую."
     )
 
     await update.message.reply_text(welcome_message)
@@ -385,10 +385,10 @@ async def setlang_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await update.message.reply_text(
-            "🌍 *Select your preferred language:*\n\n"
-            "Choose from the buttons below, or use:\n"
-            "`/setlang <language>`\n\n"
-            "Example: `/setlang spanish`",
+            "🌍 *Выберите предпочитаемый язык:*\n\n"
+            "Выберите из кнопок ниже, или используйте:\n"
+            "`/setlang <язык>`\n\n"
+            "Пример: `/setlang spanish`",
             reply_markup=reply_markup,
             parse_mode="Markdown"
         )
@@ -400,9 +400,9 @@ async def setlang_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if language.lower() == "help":
         supported_list = "\n".join(f"- {lang}" for lang in sorted(SUPPORTED_LANGUAGES.keys()))
         await update.message.reply_text(
-            f"Supported languages:\n\n{supported_list}\n\n"
-            "Usage: /setlang <language>\n"
-            "Example: /setlang french"
+            f"Поддерживаемые языки:\n\n{supported_list}\n\n"
+            "Использование: /setlang <язык>\n"
+            "Пример: /setlang french"
         )
         return
 
@@ -415,8 +415,8 @@ async def setlang_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.info(f"User {user_id} set language to {language_code}")
 
         await update.message.reply_text(
-            f"Your preferred language has been set to {language.capitalize()} ({language_code}).\n\n"
-            "Now send me any text message and I'll translate it to your preferred language!"
+            f"Ваш предпочитаемый язык установлен на {language.capitalize()} ({language_code}).\n\n"
+            "Теперь отправьте мне любое текстовое сообщение, и я переведу его на выбранный язык!"
         )
     else:
         error_message = result
@@ -438,8 +438,8 @@ async def mylang_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         logger.info(f"User {user_id} checked their language: {language_code}")
         await update.message.reply_text(
-            f"Your current language preference: {language_name.capitalize()} ({language_code})\n\n"
-            "Use /setlang <language> to change it."
+            f"Ваш текущий выбранный язык: {language_name.capitalize()} ({language_code})\n\n"
+            "Используйте /setlang <язык> для изменения."
         )
     else:
         logger.info(f"User {user_id} checked language but none is set")
@@ -464,8 +464,8 @@ async def mylang_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await update.message.reply_text(
-            "You haven't set a language preference yet.\n\n"
-            "🌍 *Select your language:*",
+            "Вы еще не установили предпочитаемый язык.\n\n"
+            "🌍 *Выберите ваш язык:*",
             reply_markup=reply_markup,
             parse_mode="Markdown"
         )
@@ -510,9 +510,9 @@ async def language_button_callback(update: Update, context: ContextTypes.DEFAULT
 
         # Update the message to show confirmation
         await query.edit_message_text(
-            f"✅ *Language set to {language_name.capitalize()} ({language_code})*\n\n"
-            "Now send me any text message and I'll translate it for you!\n\n"
-            "Use /setlang to change your language anytime.",
+            f"✅ *Язык установлен на {language_name.capitalize()} ({language_code})*\n\n"
+            "Теперь отправьте мне любое текстовое сообщение, и я переведу его!\n\n"
+            "Используйте /setlang для изменения языка в любое время.",
             parse_mode="Markdown"
         )
 
@@ -524,52 +524,52 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     logger.info(f"User {user_id} requested help")
 
     help_text = (
-        "Translation Bot - Commands & Usage\n\n"
+        "Бот-переводчик - Команды и использование\n\n"
 
         "/start\n"
-        "Show welcome message and basic information.\n\n"
+        "Показать приветственное сообщение и основную информацию.\n\n"
 
-        "/setlang [language]\n"
-        "Set your preferred translation language.\n"
-        "• Just type /setlang to see language buttons 🔘\n"
-        "• Or use: /setlang spanish\n"
-        "• Use /setlang help to see all supported languages.\n\n"
+        "/setlang [язык]\n"
+        "Установить предпочитаемый язык перевода.\n"
+        "• Просто введите /setlang, чтобы увидеть кнопки выбора языка 🔘\n"
+        "• Или используйте: /setlang spanish\n"
+        "• Используйте /setlang help, чтобы увидеть все поддерживаемые языки.\n\n"
 
         "/mylang\n"
-        "Display your current language preference.\n"
-        "Shows 'not set' if you haven't chosen a language yet.\n\n"
+        "Показать ваш текущий выбранный язык.\n"
+        "Показывает 'не установлен', если вы еще не выбрали язык.\n\n"
 
         "/trivia\n"
-        "Play a fun True/False trivia game!\n"
-        "• Answer 10 weird and interesting facts\n"
-        "• Questions appear in your selected language\n"
-        "• Use buttons to select True or False\n"
-        "• Get instant feedback with explanations\n"
-        "• See your final score at the end\n"
-        "• Play as many times as you want with new questions\n"
-        "• Each game generates completely fresh questions\n\n"
+        "Сыграть в увлекательную игру Правда/Ложь!\n"
+        "• Ответьте на 10 странных и интересных фактов\n"
+        "• Вопросы появляются на выбранном вами языке\n"
+        "• Используйте кнопки для выбора Правда или Ложь\n"
+        "• Получайте мгновенную обратную связь с объяснениями\n"
+        "• Посмотрите свой финальный счет в конце\n"
+        "• Играйте сколько угодно раз с новыми вопросами\n"
+        "• Каждая игра генерирует совершенно новые вопросы\n\n"
 
         "/help\n"
-        "Show this detailed help message.\n\n"
+        "Показать это подробное справочное сообщение.\n\n"
 
-        "How Translation Works:\n"
-        "1. Set your preferred language with /setlang\n"
-        "2. Send any text message or voice message\n"
-        "3. I'll translate it to your language using Groq AI\n\n"
+        "Как работает перевод:\n"
+        "1. Установите предпочитаемый язык с помощью /setlang\n"
+        "2. Отправьте любое текстовое или голосовое сообщение\n"
+        "3. Я переведу его на ваш язык с помощью Groq AI\n\n"
 
-        "For voice messages:\n"
-        "- Send a voice message in any language\n"
-        "- The bot will transcribe it using Whisper large-v3\n"
-        "- Then translate it to your preferred language\n"
-        "- If no language is set, you'll see transcription only\n\n"
+        "Для голосовых сообщений:\n"
+        "- Отправьте голосовое сообщение на любом языке\n"
+        "- Бот расшифрует его с помощью Whisper large-v3\n"
+        "- Затем переведет на ваш предпочитаемый язык\n"
+        "- Если язык не установлен, вы увидите только расшифровку\n\n"
 
-        "The bot shows both your original text/transcription and the translation "
-        "so you can compare them.\n\n"
+        "Бот показывает как ваш оригинальный текст/расшифровку, так и перевод, "
+        "чтобы вы могли их сравнить.\n\n"
 
-        "Powered by Groq AI:\n"
-        "- Translation: Llama 3.3 70B model\n"
-        "- Transcription: Whisper large-v3 model\n"
-        "- Trivia Questions: Llama 3.3 70B model with web verification"
+        "Работает на Groq AI:\n"
+        "- Перевод: модель Llama 3.3 70B\n"
+        "- Расшифровка: модель Whisper large-v3\n"
+        "- Вопросы викторины: модель Llama 3.3 70B с веб-верификацией"
     )
 
     await update.message.reply_text(help_text)
@@ -587,10 +587,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if user_id not in user_preferences:
         logger.info(f"User {user_id} has no language preference set")
         await update.message.reply_text(
-            "Please set your preferred translation language first!\n\n"
-            "Use /setlang <language> to set it.\n"
-            "Example: /setlang spanish\n\n"
-            "Use /setlang help to see all supported languages."
+            "Пожалуйста, сначала установите предпочитаемый язык перевода!\n\n"
+            "Используйте /setlang <язык> для установки.\n"
+            "Пример: /setlang spanish\n\n"
+            "Используйте /setlang help для просмотра всех поддерживаемых языков."
         )
         return
 
@@ -605,16 +605,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Format response with original and translation
         translated_text = result
         response = (
-            f"Original text:\n{message_text}\n\n"
-            f"Translation to {target_language_name}:\n{translated_text}"
+            f"Исходный текст:\n{message_text}\n\n"
+            f"Перевод на {target_language_name}:\n{translated_text}"
         )
         logger.info(f"Sent translation to user {user_id}")
     else:
         # Translation failed - show error and original text
         error_message = result
         response = (
-            f"Original text:\n{message_text}\n\n"
-            f"Translation failed: {error_message}"
+            f"Исходный текст:\n{message_text}\n\n"
+            f"Ошибка перевода: {error_message}"
         )
         logger.warning(f"Translation failed for user {user_id}: {error_message}")
 
@@ -632,7 +632,7 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
     # Check voice message duration
     if voice.duration < 1:
         await update.message.reply_text(
-            "Voice message is too short. Please send a longer message."
+            "Голосовое сообщение слишком короткое. Пожалуйста, отправьте более длинное сообщение."
         )
         return
 
@@ -640,8 +640,8 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
     max_size = 20 * 1024 * 1024  # 20MB
     if voice.file_size > max_size:
         await update.message.reply_text(
-            f"Voice message is too large ({voice.file_size / (1024*1024):.1f}MB).\n"
-            f"Maximum supported size is {max_size / (1024*1024):.0f}MB."
+            f"Голосовое сообщение слишком большое ({voice.file_size / (1024*1024):.1f}МБ).\n"
+            f"Максимальный поддерживаемый размер: {max_size / (1024*1024):.0f}МБ."
         )
         return
 
@@ -674,7 +674,7 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
         if not transcribe_success:
             # Transcription failed
             error_message = transcribe_result
-            response = f"Transcription failed: {error_message}"
+            response = f"Ошибка расшифровки: {error_message}"
             logger.warning(f"Transcription failed for user {user_id}: {error_message}")
             await update.message.reply_text(response)
             return
@@ -696,22 +696,22 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
             if translate_success:
                 translated_text = translate_result
                 response = (
-                    f"Transcription:\n{transcribed_text}\n\n"
-                    f"Translation to {target_language_name}:\n{translated_text}"
+                    f"Расшифровка:\n{transcribed_text}\n\n"
+                    f"Перевод на {target_language_name}:\n{translated_text}"
                 )
                 logger.info(f"Sent transcription and translation to user {user_id}")
             else:
                 # Translation failed, show transcription only
                 error_message = translate_result
                 response = (
-                    f"Transcription:\n{transcribed_text}\n\n"
-                    f"Translation failed: {error_message}"
+                    f"Расшифровка:\n{transcribed_text}\n\n"
+                    f"Ошибка перевода: {error_message}"
                 )
                 logger.warning(f"Translation failed for user {user_id}: {error_message}")
         else:
             # No language preference - show transcription only
-            response = f"Transcription:\n{transcribed_text}\n\n" \
-                      f"To get translations, set your language with /setlang <language>"
+            response = f"Расшифровка:\n{transcribed_text}\n\n" \
+                      f"Чтобы получать переводы, установите язык с помощью /setlang <язык>"
             logger.info(f"Sent transcription only to user {user_id} (no language preference)")
 
         await update.message.reply_text(response)
@@ -719,14 +719,14 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
     except asyncio.TimeoutError:
         logger.error(f"Voice file download timeout for user {user_id}")
         await update.message.reply_text(
-            f"Voice file download took too long (>{FILE_DOWNLOAD_TIMEOUT}s). Please try a smaller file."
+            f"Загрузка голосового файла заняла слишком много времени (>{FILE_DOWNLOAD_TIMEOUT}с). Пожалуйста, попробуйте файл меньшего размера."
         )
 
     except Exception as e:
         error_type = type(e).__name__
         logger.error(f"Voice message handling failed for user {user_id} ({error_type}): {str(e)}")
         await update.message.reply_text(
-            f"Failed to process voice message: {error_type}. Please try again."
+            f"Не удалось обработать голосовое сообщение: {error_type}. Пожалуйста, попробуйте снова."
         )
 
     finally:
@@ -942,8 +942,8 @@ async def send_trivia_question(update: Update, context: ContextTypes.DEFAULT_TYP
     # Create inline keyboard with True/False buttons
     keyboard = [
         [
-            InlineKeyboardButton("✓ True", callback_data=f"trivia_true_{current_index}"),
-            InlineKeyboardButton("✗ False", callback_data=f"trivia_false_{current_index}")
+            InlineKeyboardButton("✓ Правда", callback_data=f"trivia_true_{current_index}"),
+            InlineKeyboardButton("✗ Ложь", callback_data=f"trivia_false_{current_index}")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -990,22 +990,22 @@ async def end_trivia_game(update: Update, context: ContextTypes.DEFAULT_TYPE, us
     percentage = (score / total) * 100
 
     if percentage == 100:
-        message = "Perfect score! You're a trivia master!"
+        message = "Идеальный результат! Вы мастер викторины!"
     elif percentage >= 80:
-        message = "Excellent work! You really know your facts!"
+        message = "Отличная работа! Вы действительно знаете факты!"
     elif percentage >= 60:
-        message = "Good job! You did well!"
+        message = "Хорошая работа! Вы справились!"
     elif percentage >= 40:
-        message = "Not bad! Keep learning!"
+        message = "Неплохо! Продолжайте учиться!"
     else:
-        message = "Nice try! Play again to improve your score!"
+        message = "Хорошая попытка! Сыграйте снова, чтобы улучшить свой результат!"
 
     final_text = (
-        f"🎮 *Game Over!*\n\n"
-        f"*Final Score: {score} out of {total}*\n"
+        f"🎮 *Игра окончена!*\n\n"
+        f"*Итоговый счет: {score} из {total}*\n"
         f"({percentage:.0f}%)\n\n"
         f"{message}\n\n"
-        f"Want to play again? Use /trivia to start a new game with different questions!"
+        f"Хотите сыграть снова? Используйте /trivia для начала новой игры с другими вопросами!"
     )
 
     # Clean up game state
@@ -1038,18 +1038,18 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Check if user already has an active game
     if user_id in trivia_games and trivia_games[user_id].get("active"):
         await update.message.reply_text(
-            "You already have an active trivia game!\n\n"
-            "Finish your current game first, or use /trivia again to start a new game "
-            "(this will cancel your current game)."
+            "У вас уже есть активная игра в викторину!\n\n"
+            "Сначала завершите текущую игру, или используйте /trivia снова, чтобы начать новую игру "
+            "(это отменит текущую игру)."
         )
         # Clean up old game
         trivia_games.pop(user_id, None)
 
     # Send "generating questions" message with language info
     generating_msg = await update.message.reply_text(
-        f"🎮 *Starting Trivia Game ({language_name})!*\n\n"
-        "Generating 10 weird and interesting questions for you...\n"
-        "_This may take a moment..._",
+        f"🎮 *Запуск игры в викторину ({language_name})!*\n\n"
+        "Генерируем для вас 10 странных и интересных вопросов...\n"
+        "_Это может занять немного времени..._",
         parse_mode="Markdown"
     )
 
@@ -1059,8 +1059,8 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not success:
         error_message = result
         await generating_msg.edit_text(
-            f"❌ Failed to start trivia game:\n{error_message}\n\n"
-            "Please try again with /trivia"
+            f"❌ Не удалось начать игру в викторину:\n{error_message}\n\n"
+            "Пожалуйста, попробуйте снова с помощью /trivia"
         )
         return
 
@@ -1069,8 +1069,8 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Make sure we have at least 10 questions
     if len(questions) < 10:
         await generating_msg.edit_text(
-            f"❌ Could not generate enough questions (only got {len(questions)}).\n\n"
-            "Please try again with /trivia"
+            f"❌ Не удалось сгенерировать достаточно вопросов (получено только {len(questions)}).\n\n"
+            "Пожалуйста, попробуйте снова с помощью /trivia"
         )
         return
 
@@ -1090,10 +1090,10 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # Send welcome message
     await update.message.reply_text(
-        f"🎮 *Trivia Game Started ({language_name})!*\n\n"
-        "Answer 10 True/False questions.\n"
-        "You'll get instant feedback after each answer.\n\n"
-        "Let's begin!",
+        f"🎮 *Игра в викторину началась ({language_name})!*\n\n"
+        "Ответьте на 10 вопросов Правда/Ложь.\n"
+        "Вы получите мгновенную обратную связь после каждого ответа.\n\n"
+        "Давайте начнем!",
         parse_mode="Markdown"
     )
 
@@ -1116,8 +1116,8 @@ async def trivia_button_callback(update: Update, context: ContextTypes.DEFAULT_T
     # Check if user has an active game
     if user_id not in trivia_games or not trivia_games[user_id].get("active"):
         await query.edit_message_text(
-            "❌ This game has expired or was already completed.\n\n"
-            "Use /trivia to start a new game!"
+            "❌ Эта игра истекла или уже была завершена.\n\n"
+            "Используйте /trivia, чтобы начать новую игру!"
         )
         return
 
@@ -1131,8 +1131,8 @@ async def trivia_button_callback(update: Update, context: ContextTypes.DEFAULT_T
     # Verify this is the current question (prevent double-answering)
     if question_index != game_state["current_index"]:
         await query.edit_message_text(
-            "❌ This question has already been answered.\n\n"
-            "Please wait for the next question..."
+            "❌ На этот вопрос уже был дан ответ.\n\n"
+            "Пожалуйста, подождите следующий вопрос..."
         )
         return
 
@@ -1147,11 +1147,11 @@ async def trivia_button_callback(update: Update, context: ContextTypes.DEFAULT_T
     if is_correct:
         game_state["score"] += 1
         result_emoji = "✅"
-        result_text = "Correct!"
+        result_text = "Правильно!"
     else:
         result_emoji = "❌"
-        answer_text = "True" if correct_answer else "False"
-        result_text = f"Wrong! The answer is {answer_text}."
+        answer_text = "Правда" if correct_answer else "Ложь"
+        result_text = f"Неправильно! Правильный ответ: {answer_text}."
 
     # Update current index
     game_state["current_index"] += 1
@@ -1164,7 +1164,7 @@ async def trivia_button_callback(update: Update, context: ContextTypes.DEFAULT_T
     response_text = (
         f"{result_emoji} *{result_text}*\n\n"
         f"_{explanation}_\n\n"
-        f"Score: {score}/{question_number}"
+        f"Счет: {score}/{question_number}"
     )
 
     # Update the message with result
@@ -1192,7 +1192,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if update and update.effective_message:
         await update.effective_message.reply_text(
-            "Sorry, an error occurred while processing your request. Please try again."
+            "Извините, произошла ошибка при обработке вашего запроса. Пожалуйста, попробуйте снова."
         )
 
 
