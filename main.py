@@ -542,10 +542,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/trivia\n"
         "Play a fun True/False trivia game!\n"
         "• Answer 10 weird and interesting facts\n"
+        "• Questions appear in your selected language\n"
         "• Use buttons to select True or False\n"
         "• Get instant feedback with explanations\n"
         "• See your final score at the end\n"
-        "• Play as many times as you want with new questions\n\n"
+        "• Play as many times as you want with new questions\n"
+        "• Each game generates completely fresh questions\n\n"
 
         "/help\n"
         "Show this detailed help message.\n\n"
@@ -794,11 +796,12 @@ async def verify_claim_with_search(claim: str, expected_answer: bool) -> tuple[b
 
 
 @async_retry(max_retries=MAX_RETRIES)
-async def generate_trivia_questions(count: int = 10) -> tuple[bool, Any]:
+async def generate_trivia_questions(language_code: str = "en", count: int = 10) -> tuple[bool, Any]:
     """
-    Generate trivia questions using Groq API.
+    Generate trivia questions using Groq API in the specified language.
 
     Args:
+        language_code: Language code (e.g., "en", "es", "fr")
         count: Number of questions to generate
 
     Returns:
@@ -810,36 +813,42 @@ async def generate_trivia_questions(count: int = 10) -> tuple[bool, Any]:
         logger.error("Groq client is not initialized")
         return False, "Trivia service is not available. Please contact the administrator."
 
+    # Get the language name for the prompt
+    language_name = LANGUAGE_NAMES.get(language_code, "English")
+
     try:
-        logger.info(f"Generating {count} trivia questions...")
+        logger.info(f"Generating {count} trivia questions in {language_name}...")
 
         prompt = f"""Generate exactly {count} weird, surprising, and interesting true-or-false claims about the world.
 Make them fun and engaging! Mix true and false claims (roughly 50/50 split).
 Topics can include: animals, science, history, geography, technology, human body, space, food, etc.
+
+IMPORTANT: All content must be in {language_name}. The claim, explanation, and ALL text must be written in {language_name}.
 
 Requirements:
 - Each claim should be clear and specific
 - Avoid controversial or offensive topics
 - Make them surprising or counterintuitive
 - Include a brief (1-2 sentence) explanation for each
+- Write everything in {language_name}
 
 Return ONLY a valid JSON array with this exact structure:
 [
   {{
-    "claim": "The exact claim text here",
+    "claim": "The exact claim text here (in {language_name})",
     "answer": true,
-    "explanation": "Brief explanation why this is true or false"
+    "explanation": "Brief explanation why this is true or false (in {language_name})"
   }}
 ]
 
-Return ONLY the JSON array, no other text."""
+Return ONLY the JSON array, no other text. Remember: ALL TEXT must be in {language_name}."""
 
         chat_completion = await asyncio.wait_for(
             groq_client.chat.completions.create(
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a trivia question generator. You create interesting true/false questions. You ONLY respond with valid JSON arrays."
+                        "content": f"You are a trivia question generator. You create interesting true/false questions in {language_name}. You ONLY respond with valid JSON arrays. All text content must be in {language_name}."
                     },
                     {
                         "role": "user",
@@ -847,7 +856,7 @@ Return ONLY the JSON array, no other text."""
                     }
                 ],
                 model="llama-3.3-70b-versatile",
-                temperature=0.8,  # Higher temperature for more creative questions
+                temperature=0.8,  # Higher temperature for more creative and varied questions
                 max_tokens=2048,
             ),
             timeout=30
@@ -880,7 +889,7 @@ Return ONLY the JSON array, no other text."""
         if len(validated_questions) < count:
             logger.warning(f"Only {len(validated_questions)} valid questions out of {count}")
 
-        logger.info(f"Successfully generated {len(validated_questions)} trivia questions")
+        logger.info(f"Successfully generated {len(validated_questions)} trivia questions in {language_name}")
         return True, validated_questions
 
     except json.JSONDecodeError as e:
@@ -1022,6 +1031,10 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     logger.info(f"User {user_id} started trivia game")
 
+    # Get user's language preference (default to English)
+    language_code = user_preferences.get(user_id, "en")
+    language_name = LANGUAGE_NAMES.get(language_code, "English")
+
     # Check if user already has an active game
     if user_id in trivia_games and trivia_games[user_id].get("active"):
         await update.message.reply_text(
@@ -1032,16 +1045,16 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Clean up old game
         trivia_games.pop(user_id, None)
 
-    # Send "generating questions" message
+    # Send "generating questions" message with language info
     generating_msg = await update.message.reply_text(
-        "🎮 *Starting Trivia Game!*\n\n"
+        f"🎮 *Starting Trivia Game ({language_name})!*\n\n"
         "Generating 10 weird and interesting questions for you...\n"
         "_This may take a moment..._",
         parse_mode="Markdown"
     )
 
-    # Generate questions
-    success, result = await generate_trivia_questions(10)
+    # Generate questions in user's language
+    success, result = await generate_trivia_questions(language_code=language_code, count=10)
 
     if not success:
         error_message = result
@@ -1066,17 +1079,18 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "questions": questions[:10],  # Use exactly 10 questions
         "current_index": 0,
         "score": 0,
-        "active": True
+        "active": True,
+        "language_code": language_code  # Store language for potential future use
     }
 
-    logger.info(f"Trivia game initialized for user {user_id} with {len(questions[:10])} questions")
+    logger.info(f"Trivia game initialized for user {user_id} with {len(questions[:10])} questions in {language_name}")
 
     # Delete generating message
     await generating_msg.delete()
 
     # Send welcome message
     await update.message.reply_text(
-        "🎮 *Trivia Game Started!*\n\n"
+        f"🎮 *Trivia Game Started ({language_name})!*\n\n"
         "Answer 10 True/False questions.\n"
         "You'll get instant feedback after each answer.\n\n"
         "Let's begin!",
