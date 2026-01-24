@@ -1277,7 +1277,8 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def trivia_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handle button presses in trivia game.
-    Supports category selection, answer buttons (boolean and multiple choice), and navigation.
+    Supports category selection and answer buttons (boolean and multiple choice).
+    Next question is shown automatically after a short pause.
     """
     query = update.callback_query
     await query.answer()  # Acknowledge button press
@@ -1289,9 +1290,9 @@ async def trivia_button_callback(update: Update, context: ContextTypes.DEFAULT_T
     if not callback_data.startswith("trivia_"):
         return
 
-    # Parse callback data: trivia_category_{id}, trivia_answer_{q_idx}_{ans_idx}, or trivia_next_{q_idx}
+    # Parse callback data: trivia_category_{id} or trivia_answer_{q_idx}_{ans_idx}
     parts = callback_data.split("_")
-    action = parts[1]  # "category", "answer", or "next"
+    action = parts[1]  # "category" or "answer"
 
     # Handle category selection
     if action == "category":
@@ -1375,16 +1376,6 @@ async def trivia_button_callback(update: Update, context: ContextTypes.DEFAULT_T
 
     game_state = trivia_games[user_id]
 
-    # Handle "next" button press
-    if action == "next":
-        if game_state["current_index"] < len(game_state["questions"]):
-            # More questions to go
-            await send_trivia_question(update, context, user_id)
-        else:
-            # Game over
-            await end_trivia_game(update, context, user_id)
-        return
-
     # Handle answer buttons
     if action == "answer":
         question_index = int(parts[2])
@@ -1449,31 +1440,25 @@ async def trivia_button_callback(update: Update, context: ContextTypes.DEFAULT_T
                 f"Счет: {score}/{question_number}"
             )
 
-        # Create "Next" button or "Show Results" button
-        if game_state["current_index"] < total_questions:
-            # More questions to go - show "Next Question" button
-            keyboard = [
-                [InlineKeyboardButton("Следующий вопрос ➡️", callback_data=f"trivia_next_{question_index}")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(
-                response_text,
-                parse_mode="Markdown",
-                reply_markup=reply_markup
-            )
-        else:
-            # Last question - show "Show Results" button
-            keyboard = [
-                [InlineKeyboardButton("Показать результаты 🏆", callback_data=f"trivia_next_{question_index}")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(
-                response_text,
-                parse_mode="Markdown",
-                reply_markup=reply_markup
-            )
+        # Show feedback without button
+        await query.edit_message_text(
+            response_text,
+            parse_mode="Markdown"
+        )
 
         logger.info(f"User {user_id} answered question {question_number}: {'correct' if is_correct else 'wrong'}")
+
+        # Wait 2.5 seconds before showing next question
+        await asyncio.sleep(2.5)
+
+        # Automatically show next question or end game
+        if game_state["current_index"] < total_questions:
+            # More questions to go
+            await send_trivia_question(update, context, user_id)
+        else:
+            # Game over
+            await end_trivia_game(update, context, user_id)
+
         return
 
 
