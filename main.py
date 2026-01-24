@@ -7,6 +7,7 @@ Production-ready with retry logic, rate limiting, and graceful shutdown.
 """
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -64,6 +65,36 @@ SUPPORTED_LANGUAGES = {
     "korean": "ko",
     "arabic": "ar",
     "hindi": "hi",
+}
+
+# OpenTDB Trivia Categories (fetched from https://opentdb.com/api_category.php)
+# Format: {id: name}
+TRIVIA_CATEGORIES = {
+    0: "All Categories",  # Special option - no category parameter in API
+    9: "General Knowledge",
+    10: "Entertainment: Books",
+    11: "Entertainment: Film",
+    12: "Entertainment: Music",
+    13: "Entertainment: Musicals & Theatres",
+    14: "Entertainment: Television",
+    15: "Entertainment: Video Games",
+    16: "Entertainment: Board Games",
+    17: "Science & Nature",
+    18: "Science: Computers",
+    19: "Science: Mathematics",
+    20: "Mythology",
+    21: "Sports",
+    22: "Geography",
+    23: "History",
+    24: "Politics",
+    25: "Art",
+    26: "Celebrities",
+    27: "Animals",
+    28: "Vehicles",
+    29: "Entertainment: Comics",
+    30: "Science: Gadgets",
+    31: "Entertainment: Japanese Anime & Manga",
+    32: "Entertainment: Cartoon & Animations",
 }
 
 # Language code to full name mapping for Groq translation prompts
@@ -541,14 +572,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Показывает 'не установлен', если вы еще не выбрали язык.\n\n"
 
         "/trivia\n"
-        "Сыграть в увлекательную игру Правда/Ложь!\n"
-        "• Ответьте на 10 странных и интересных фактов\n"
-        "• Вопросы появляются на выбранном вами языке\n"
-        "• Используйте кнопки для выбора Правда или Ложь\n"
-        "• Получайте мгновенную обратную связь с объяснениями\n"
+        "Сыграть в увлекательную игру-викторину!\n"
+        "• Выберите категорию из 24+ вариантов (История, Наука, Спорт и др.)\n"
+        "• Ответьте на 10 вопросов на выбранном вами языке\n"
+        "• Вопросы бывают Правда/Ложь или множественный выбор\n"
+        "• Используйте кнопки для выбора ответа\n"
+        "• Получайте мгновенную обратную связь\n"
         "• Посмотрите свой финальный счет в конце\n"
-        "• Играйте сколько угодно раз с новыми вопросами\n"
-        "• Каждая игра генерирует совершенно новые вопросы\n\n"
+        "• Играйте сколько угодно раз с новыми вопросами\n\n"
 
         "/help\n"
         "Показать это подробное справочное сообщение.\n\n"
@@ -567,10 +598,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "Бот показывает как ваш оригинальный текст/расшифровку, так и перевод, "
         "чтобы вы могли их сравнить.\n\n"
 
-        "Работает на Groq AI:\n"
+        "Работает на Groq AI и Open Trivia Database:\n"
         "- Перевод: модель Llama 3.3 70B\n"
         "- Расшифровка: модель Whisper large-v3\n"
-        "- Вопросы викторины: модель Llama 3.3 70B с веб-верификацией"
+        "- Вопросы викторины: Open Trivia Database (opentdb.com)\n"
+        "- Перевод викторины: модель Llama 3.3 70B"
     )
 
     await update.message.reply_text(help_text)
@@ -745,199 +777,185 @@ async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYP
 # ==============================================================================
 
 @async_retry(max_retries=MAX_RETRIES)
-async def verify_claim_with_search(claim: str, expected_answer: bool) -> tuple[bool, str]:
+async def fetch_opentdb_questions(category_id: int = 0, language_code: str = "en", count: int = 10) -> tuple[bool, Any]:
     """
-    Verify a trivia claim using web search.
+    Fetch trivia questions from Open Trivia Database API and translate them.
+
+    Questions are fetched in English from OpenTDB, then translated to the user's
+    target language using Groq. Supports both boolean (True/False) and multiple
+    choice questions.
 
     Args:
-        claim: The claim to verify
-        expected_answer: The expected answer (True or False)
-
-    Returns:
-        Tuple of (is_verified: bool, search_summary: str)
-        - On verification success: (True, brief_explanation)
-        - On verification failure: (False, reason)
-    """
-    try:
-        # Use httpx to search for verification
-        # We'll use DuckDuckGo Instant Answer API (no API key needed)
-        search_query = f"{claim} fact check"
-
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            # Try DuckDuckGo Instant Answer API
-            response = await client.get(
-                "https://api.duckduckgo.com/",
-                params={
-                    "q": search_query,
-                    "format": "json",
-                    "no_html": 1,
-                    "skip_disambig": 1
-                }
-            )
-
-            if response.status_code == 200:
-                data = response.json()
-                # Check if we got relevant results
-                abstract = data.get("AbstractText", "")
-
-                if abstract and len(abstract) > 20:
-                    # We got some information, consider it verified
-                    # Extract a brief summary (first sentence)
-                    first_sentence = abstract.split('.')[0] + '.'
-                    logger.info(f"Claim verified via search: {claim[:50]}")
-                    return True, first_sentence[:200]
-
-        # If search didn't return useful results, assume we can't verify
-        logger.warning(f"Could not verify claim via search: {claim[:50]}")
-        return False, "Could not find reliable verification"
-
-    except Exception as e:
-        logger.error(f"Search verification failed: {type(e).__name__}: {e}")
-        return False, f"Search failed: {type(e).__name__}"
-
-
-@async_retry(max_retries=MAX_RETRIES)
-async def generate_trivia_questions(language_code: str = "en", count: int = 10) -> tuple[bool, Any]:
-    """
-    Generate trivia questions using Groq API in the specified language.
-
-    Args:
-        language_code: Language code (e.g., "en", "es", "fr")
-        count: Number of questions to generate
+        category_id: OpenTDB category ID (0 for all categories)
+        language_code: Target language code for translation (e.g., "en", "es", "fr")
+        count: Number of questions to fetch
 
     Returns:
         Tuple of (success: bool, result: list or error_message)
         - On success: (True, list_of_question_dicts)
         - On failure: (False, error_message)
+
+    Question dict format:
+        {
+            "claim": str,  # The question text (translated)
+            "answer": bool or int,  # For boolean: True/False, for multiple: index 0-3
+            "options": list[str],  # For multiple choice: list of 4 answer options (translated, shuffled)
+            "type": str,  # "boolean" or "multiple"
+            "explanation": str  # Always "N/A" since OpenTDB doesn't provide explanations
+        }
     """
     if not groq_client:
         logger.error("Groq client is not initialized")
         return False, "Trivia service is not available. Please contact the administrator."
 
-    # Get the language name for the prompt
     language_name = LANGUAGE_NAMES.get(language_code, "English")
 
     try:
-        logger.info(f"Generating {count} trivia questions in {language_name}...")
+        logger.info(f"Fetching {count} questions from OpenTDB (category: {category_id})...")
 
-        # Add timestamp and random elements to make each request unique
-        # Randomize topic focus to get variety
-        topic_pools = [
-            ["animals", "marine life", "insects", "birds", "extinct creatures"],
-            ["physics", "chemistry", "biology", "astronomy", "geology"],
-            ["ancient civilizations", "medieval times", "modern history", "historical figures"],
-            ["countries", "cities", "natural wonders", "oceans", "deserts"],
-            ["inventions", "computers", "space exploration", "engineering"],
-            ["human anatomy", "psychology", "medicine", "genetics"],
-            ["planets", "stars", "black holes", "space phenomena"],
-            ["cuisine", "plants", "beverages", "cooking science"]
-        ]
+        # Build OpenTDB API URL
+        # We fetch mixed type questions to get variety
+        url = f"https://opentdb.com/api.php?amount={count}"
+        if category_id != 0:
+            url += f"&category={category_id}"
 
-        selected_topics = random.sample(topic_pools, k=3)
-        flat_topics = [topic for sublist in selected_topics for topic in sublist]
-        topics_str = ", ".join(flat_topics)
+        # Fetch questions from OpenTDB
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(url)
 
-        # Add uniqueness markers
-        session_id = f"{int(time.time())}{random.randint(1000, 9999)}"
+            if response.status_code != 200:
+                logger.error(f"OpenTDB API returned status {response.status_code}")
+                return False, f"Failed to fetch questions from trivia database (HTTP {response.status_code})"
 
-        prompt = f"""Generate exactly {count} UNIQUE, ORIGINAL weird, surprising, and interesting true-or-false claims.
+            data = response.json()
 
-CRITICAL: Generate FRESH and UNCOMMON facts. Avoid popular trivia like "honey never spoils", "octopuses have hearts", "Cleopatra lived closer to", etc. Be creative and dig deeper!
+            # Check response code
+            response_code = data.get("response_code", -1)
+            if response_code != 0:
+                error_messages = {
+                    1: "No questions found for this category. Try a different category.",
+                    2: "Invalid parameter in request.",
+                    3: "Session token not found.",
+                    4: "All questions exhausted for this category.",
+                    5: "Rate limited. Please wait a few seconds and try again."
+                }
+                error_msg = error_messages.get(response_code, f"Unknown error (code {response_code})")
+                logger.error(f"OpenTDB error: {error_msg}")
+                return False, error_msg
 
-Focus on these topics: {topics_str}
+            opentdb_results = data.get("results", [])
 
-Requirements:
-- Mix true and false claims (roughly 50/50 split)
-- Each claim should be clear, specific, and UNCOMMON
-- Avoid controversial or offensive topics
-- Make them surprising or counterintuitive
-- Include a brief (1-2 sentence) explanation for each
-- Session ID for uniqueness: {session_id}
+            if not opentdb_results:
+                logger.error("OpenTDB returned empty results")
+                return False, "No questions available. Please try again."
 
-IMPORTANT: All content must be in {language_name}. The claim, explanation, and ALL text must be written in {language_name}.
+        logger.info(f"Fetched {len(opentdb_results)} questions from OpenTDB")
 
-Return ONLY a valid JSON array with this exact structure:
-[
-  {{
-    "claim": "The exact claim text here (in {language_name})",
-    "answer": true,
-    "explanation": "Brief explanation why this is true or false (in {language_name})"
-  }}
-]
+        # Process and translate questions
+        processed_questions = []
 
-Return ONLY the JSON array, no other text. Remember: ALL TEXT must be in {language_name}."""
+        for idx, q in enumerate(opentdb_results):
+            try:
+                # Decode HTML entities in question and answers
+                question_text = html.unescape(q["question"])
+                correct_answer = html.unescape(q["correct_answer"])
+                incorrect_answers = [html.unescape(ans) for ans in q["incorrect_answers"]]
+                question_type = q["type"]
 
-        chat_completion = await asyncio.wait_for(
-            groq_client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": f"You are a trivia question generator. You create interesting true/false questions in {language_name}. You ONLY respond with valid JSON arrays. All text content must be in {language_name}."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                model="llama-3.3-70b-versatile",
-                temperature=0.8,  # Higher temperature for more creative and varied questions
-                max_tokens=2048,
-            ),
-            timeout=30
-        )
+                # Translate question to target language (only if not English)
+                if language_code != "en":
+                    logger.debug(f"Translating question {idx+1} to {language_name}...")
+                    success, translated_question = await translate_text(question_text, language_code)
+                    if not success:
+                        # If translation fails, use English
+                        logger.warning(f"Translation failed for question {idx+1}, using English")
+                        translated_question = question_text
+                else:
+                    translated_question = question_text
 
-        response_text = chat_completion.choices[0].message.content.strip()
-        logger.debug(f"Groq response: {response_text[:200]}")
+                # Process based on question type
+                if question_type == "boolean":
+                    # Boolean question
+                    answer_bool = (correct_answer.lower() == "true")
 
-        # Extract JSON from response (in case there's extra text)
-        json_match = re.search(r'\[.*\]', response_text, re.DOTALL)
-        if json_match:
-            json_text = json_match.group(0)
-        else:
-            json_text = response_text
+                    processed_questions.append({
+                        "claim": translated_question,
+                        "answer": answer_bool,
+                        "type": "boolean",
+                        "explanation": "N/A"  # OpenTDB doesn't provide explanations
+                    })
 
-        # Parse JSON
-        questions = json.loads(json_text)
+                elif question_type == "multiple":
+                    # Multiple choice question
+                    # Combine correct and incorrect answers
+                    all_answers = [correct_answer] + incorrect_answers
 
-        # Validate structure
-        if not isinstance(questions, list) or len(questions) == 0:
-            logger.error("Invalid questions format: not a list or empty")
-            return False, "Generated questions have invalid format"
+                    # Translate all answers (only if not English)
+                    if language_code != "en":
+                        translated_answers = []
+                        for ans in all_answers:
+                            success, translated_ans = await translate_text(ans, language_code)
+                            if success:
+                                translated_answers.append(translated_ans)
+                            else:
+                                # If translation fails, use English
+                                logger.warning(f"Translation failed for answer, using English")
+                                translated_answers.append(ans)
+                    else:
+                        translated_answers = all_answers
 
-        # Validate each question
-        validated_questions = []
-        for q in questions:
-            if isinstance(q, dict) and "claim" in q and "answer" in q and "explanation" in q:
-                validated_questions.append(q)
+                    # Shuffle answers but remember correct answer index
+                    # Create list of (answer, is_correct) tuples
+                    answer_tuples = [(translated_answers[0], True)] + [(ans, False) for ans in translated_answers[1:]]
+                    random.shuffle(answer_tuples)
 
-        if len(validated_questions) < count:
-            logger.warning(f"Only {len(validated_questions)} valid questions out of {count}")
+                    # Extract shuffled answers and find correct index
+                    shuffled_answers = [ans for ans, _ in answer_tuples]
+                    correct_index = next(i for i, (_, is_correct) in enumerate(answer_tuples) if is_correct)
 
-        logger.info(f"Successfully generated {len(validated_questions)} trivia questions in {language_name}")
-        return True, validated_questions
+                    processed_questions.append({
+                        "claim": translated_question,
+                        "answer": correct_index,  # Index of correct answer (0-3)
+                        "options": shuffled_answers,  # List of 4 shuffled answers
+                        "type": "multiple",
+                        "explanation": "N/A"
+                    })
 
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse trivia questions JSON: {e}")
-        logger.error(f"Response was: {response_text[:500]}")
-        return False, "Failed to parse generated questions"
+                else:
+                    logger.warning(f"Unknown question type: {question_type}")
+                    continue
 
-    except asyncio.TimeoutError:
-        logger.error("Trivia generation timeout")
-        return False, "Question generation took too long. Please try again."
+            except Exception as e:
+                logger.error(f"Error processing question {idx+1}: {type(e).__name__}: {e}")
+                continue
 
-    except RateLimitError as e:
-        logger.warning(f"Trivia generation rate limit: {e}")
-        return False, "Trivia service is busy. Please wait a moment and try again."
+        if len(processed_questions) < count:
+            logger.warning(f"Only {len(processed_questions)} valid questions out of {count}")
+
+        if not processed_questions:
+            return False, "Failed to process questions. Please try again."
+
+        logger.info(f"Successfully processed {len(processed_questions)} trivia questions")
+        return True, processed_questions
+
+    except httpx.TimeoutException:
+        logger.error("OpenTDB API timeout")
+        return False, "Connection to trivia database timed out. Please try again."
+
+    except httpx.HTTPError as e:
+        logger.error(f"OpenTDB HTTP error: {e}")
+        return False, "Failed to connect to trivia database. Please try again."
 
     except Exception as e:
         error_type = type(e).__name__
-        logger.error(f"Trivia generation failed ({error_type}): {str(e)}")
-        return False, f"Failed to generate questions: {error_type}"
+        logger.error(f"OpenTDB fetch failed ({error_type}): {str(e)}")
+        return False, f"Failed to fetch questions: {error_type}"
 
 
 async def send_trivia_question(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
     """
     Send the current trivia question to the user.
+    Supports both boolean (True/False) and multiple choice questions.
 
     Args:
         update: Telegram update object
@@ -962,21 +980,61 @@ async def send_trivia_question(update: Update, context: ContextTypes.DEFAULT_TYP
     question = questions[current_index]
     question_number = current_index + 1
     total_questions = len(questions)
+    question_type = question.get("type", "boolean")
 
-    # Create inline keyboard with True/False buttons
-    keyboard = [
-        [
-            InlineKeyboardButton("✓ Правда", callback_data=f"trivia_true_{current_index}"),
-            InlineKeyboardButton("✗ Ложь", callback_data=f"trivia_false_{current_index}")
+    # Create inline keyboard based on question type
+    if question_type == "boolean":
+        # Boolean question: True/False buttons
+        keyboard = [
+            [
+                InlineKeyboardButton("✓ Правда", callback_data=f"trivia_answer_{current_index}_1"),
+                InlineKeyboardButton("✗ Ложь", callback_data=f"trivia_answer_{current_index}_0")
+            ]
         ]
-    ]
+    elif question_type == "multiple":
+        # Multiple choice: 4 answer buttons
+        keyboard = []
+        options = question.get("options", [])
+        # Create 2 rows with 2 buttons each for better mobile display
+        for i in range(0, len(options), 2):
+            row = []
+            for j in range(i, min(i+2, len(options))):
+                # Use letters A, B, C, D
+                letter = chr(65 + j)  # 65 is ASCII for 'A'
+                button_text = f"{letter}. {options[j]}"
+                # Truncate long answers for button display
+                if len(button_text) > 50:
+                    button_text = button_text[:47] + "..."
+                row.append(InlineKeyboardButton(
+                    button_text,
+                    callback_data=f"trivia_answer_{current_index}_{j}"
+                ))
+            keyboard.append(row)
+    else:
+        logger.error(f"Unknown question type: {question_type}")
+        return
+
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    question_text = (
-        f"*Question {question_number}/{total_questions}*\n\n"
-        f"{question['claim']}\n\n"
-        f"_Current score: {score}/{question_number - 1}_" if question_number > 1 else f"*Question {question_number}/{total_questions}*\n\n{question['claim']}"
-    )
+    # Build question text
+    if question_type == "multiple":
+        # For multiple choice, show options in the message too
+        options_text = "\n".join([f"{chr(65+i)}. {opt}" for i, opt in enumerate(question.get("options", []))])
+        question_text = (
+            f"*Question {question_number}/{total_questions}*\n\n"
+            f"{question['claim']}\n\n"
+            f"{options_text}\n\n"
+            f"_Current score: {score}/{question_number - 1}_" if question_number > 1
+            else f"*Question {question_number}/{total_questions}*\n\n{question['claim']}\n\n{options_text}"
+        )
+    else:
+        # For boolean, simple format
+        question_text = (
+            f"*Question {question_number}/{total_questions}*\n\n"
+            f"{question['claim']}\n\n"
+            f"_Current score: {score}/{question_number - 1}_" if question_number > 1
+            else f"*Question {question_number}/{total_questions}*\n\n{question['claim']}"
+        )
 
     # Send question
     if update.callback_query:
@@ -1050,7 +1108,7 @@ async def end_trivia_game(update: Update, context: ContextTypes.DEFAULT_TYPE, us
 
 
 async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle the /trivia command - start a new trivia game."""
+    """Handle the /trivia command - show category selection."""
     user_id = update.effective_user.id
 
     logger.info(f"User {user_id} started trivia game")
@@ -1069,64 +1127,44 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Clean up old game
         trivia_games.pop(user_id, None)
 
-    # Send "generating questions" message with language info
-    generating_msg = await update.message.reply_text(
-        f"🎮 *Запуск игры в викторину ({language_name})!*\n\n"
-        "Генерируем для вас 10 странных и интересных вопросов...\n"
-        "_Это может занять немного времени..._",
-        parse_mode="Markdown"
-    )
+    # Show category selection
+    # Create inline keyboard with category buttons (3 buttons per row)
+    keyboard = []
 
-    # Generate questions in user's language
-    success, result = await generate_trivia_questions(language_code=language_code, count=10)
+    # Sort categories by ID
+    sorted_categories = sorted(TRIVIA_CATEGORIES.items())
 
-    if not success:
-        error_message = result
-        await generating_msg.edit_text(
-            f"❌ Не удалось начать игру в викторину:\n{error_message}\n\n"
-            "Пожалуйста, попробуйте снова с помощью /trivia"
-        )
-        return
+    # Create rows of 2 buttons each for better mobile display
+    for i in range(0, len(sorted_categories), 2):
+        row = []
+        for cat_id, cat_name in sorted_categories[i:i+2]:
+            # Shorten long category names for better button display
+            display_name = cat_name
+            if len(display_name) > 30:
+                display_name = display_name[:27] + "..."
 
-    questions = result
+            row.append(InlineKeyboardButton(
+                display_name,
+                callback_data=f"trivia_category_{cat_id}"
+            ))
+        keyboard.append(row)
 
-    # Make sure we have at least 10 questions
-    if len(questions) < 10:
-        await generating_msg.edit_text(
-            f"❌ Не удалось сгенерировать достаточно вопросов (получено только {len(questions)}).\n\n"
-            "Пожалуйста, попробуйте снова с помощью /trivia"
-        )
-        return
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # Initialize game state
-    trivia_games[user_id] = {
-        "questions": questions[:10],  # Use exactly 10 questions
-        "current_index": 0,
-        "score": 0,
-        "active": True,
-        "language_code": language_code  # Store language for potential future use
-    }
-
-    logger.info(f"Trivia game initialized for user {user_id} with {len(questions[:10])} questions in {language_name}")
-
-    # Delete generating message
-    await generating_msg.delete()
-
-    # Send welcome message
     await update.message.reply_text(
-        f"🎮 *Игра в викторину началась ({language_name})!*\n\n"
-        "Ответьте на 10 вопросов Правда/Ложь.\n"
-        "Вы получите мгновенную обратную связь после каждого ответа.\n\n"
-        "Давайте начнем!",
+        f"🎮 *Игра в викторину ({language_name})*\n\n"
+        "Выберите категорию вопросов:\n"
+        "_Вы получите 10 вопросов из выбранной категории_",
+        reply_markup=reply_markup,
         parse_mode="Markdown"
     )
-
-    # Send first question
-    await send_trivia_question(update, context, user_id)
 
 
 async def trivia_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle True/False button presses in trivia game."""
+    """
+    Handle button presses in trivia game.
+    Supports category selection, answer buttons (boolean and multiple choice), and navigation.
+    """
     query = update.callback_query
     await query.answer()  # Acknowledge button press
 
@@ -1137,7 +1175,83 @@ async def trivia_button_callback(update: Update, context: ContextTypes.DEFAULT_T
     if not callback_data.startswith("trivia_"):
         return
 
-    # Check if user has an active game
+    # Parse callback data: trivia_category_{id}, trivia_answer_{q_idx}_{ans_idx}, or trivia_next_{q_idx}
+    parts = callback_data.split("_")
+    action = parts[1]  # "category", "answer", or "next"
+
+    # Handle category selection
+    if action == "category":
+        category_id = int(parts[2])
+        category_name = TRIVIA_CATEGORIES.get(category_id, "Unknown")
+
+        # Get user's language preference
+        language_code = user_preferences.get(user_id, "en")
+        language_name = LANGUAGE_NAMES.get(language_code, "English")
+
+        # Show loading message
+        await query.edit_message_text(
+            f"🎮 *Запуск игры в викторину*\n\n"
+            f"Категория: *{category_name}*\n"
+            f"Язык: {language_name}\n\n"
+            "Загружаем 10 вопросов...\n"
+            "_Это может занять немного времени..._",
+            parse_mode="Markdown"
+        )
+
+        # Fetch questions from OpenTDB
+        success, result = await fetch_opentdb_questions(
+            category_id=category_id,
+            language_code=language_code,
+            count=10
+        )
+
+        if not success:
+            error_message = result
+            await query.edit_message_text(
+                f"❌ Не удалось начать игру в викторину:\n{error_message}\n\n"
+                "Пожалуйста, попробуйте снова с помощью /trivia"
+            )
+            return
+
+        questions = result
+
+        # Make sure we have enough questions
+        if len(questions) < 10:
+            await query.edit_message_text(
+                f"❌ Недостаточно вопросов (получено только {len(questions)}).\n\n"
+                "Попробуйте другую категорию с помощью /trivia"
+            )
+            return
+
+        # Initialize game state
+        trivia_games[user_id] = {
+            "questions": questions[:10],  # Use exactly 10 questions
+            "current_index": 0,
+            "score": 0,
+            "active": True,
+            "language_code": language_code,
+            "category_id": category_id,
+            "category_name": category_name
+        }
+
+        logger.info(f"Trivia game started for user {user_id}: {category_name} in {language_name}")
+
+        # Show welcome message
+        await query.edit_message_text(
+            f"🎮 *Игра в викторину началась!*\n\n"
+            f"Категория: *{category_name}*\n"
+            f"Язык: {language_name}\n\n"
+            "Ответьте на 10 вопросов.\n"
+            "Вы получите мгновенную обратную связь после каждого ответа.\n\n"
+            "Давайте начнем!",
+            parse_mode="Markdown"
+        )
+
+        # Send first question
+        await send_trivia_question(update, context, user_id)
+        return
+
+    # For answer and next actions, check if user has an active game
     if user_id not in trivia_games or not trivia_games[user_id].get("active"):
         await query.edit_message_text(
             "❌ Эта игра истекла или уже была завершена.\n\n"
@@ -1146,11 +1260,6 @@ async def trivia_button_callback(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     game_state = trivia_games[user_id]
-
-    # Parse callback data: trivia_true_0, trivia_false_0, or trivia_next_0
-    parts = callback_data.split("_")
-    action = parts[1]  # "true", "false", or "next"
-    question_index = int(parts[2])
 
     # Handle "next" button press
     if action == "next":
@@ -1162,73 +1271,96 @@ async def trivia_button_callback(update: Update, context: ContextTypes.DEFAULT_T
             await end_trivia_game(update, context, user_id)
         return
 
-    # Handle answer buttons (true/false)
-    user_answer = action == "true"
+    # Handle answer buttons
+    if action == "answer":
+        question_index = int(parts[2])
+        answer_index = int(parts[3])
 
-    # Verify this is the current question (prevent double-answering)
-    if question_index != game_state["current_index"]:
-        await query.edit_message_text(
-            "❌ На этот вопрос уже был дан ответ.\n\n"
-            "Пожалуйста, подождите следующий вопрос..."
-        )
+        # Verify this is the current question (prevent double-answering)
+        if question_index != game_state["current_index"]:
+            await query.edit_message_text(
+                "❌ На этот вопрос уже был дан ответ.\n\n"
+                "Пожалуйста, подождите следующий вопрос..."
+            )
+            return
+
+        questions = game_state["questions"]
+        current_question = questions[question_index]
+        question_type = current_question.get("type", "boolean")
+        correct_answer = current_question["answer"]
+        explanation = current_question.get("explanation", "N/A")
+
+        # Check if answer is correct
+        if question_type == "boolean":
+            # For boolean: answer_index is 0 (False) or 1 (True)
+            user_answer_bool = (answer_index == 1)
+            is_correct = (user_answer_bool == correct_answer)
+            correct_answer_text = "Правда" if correct_answer else "Ложь"
+
+        elif question_type == "multiple":
+            # For multiple choice: answer_index is 0-3
+            is_correct = (answer_index == correct_answer)
+            options = current_question.get("options", [])
+            correct_answer_text = options[correct_answer] if correct_answer < len(options) else "Unknown"
+
+        else:
+            logger.error(f"Unknown question type: {question_type}")
+            return
+
+        if is_correct:
+            game_state["score"] += 1
+            result_emoji = "✅"
+            result_text = "Правильно!"
+        else:
+            result_emoji = "❌"
+            result_text = f"Неправильно! Правильный ответ: {correct_answer_text}."
+
+        # Update current index
+        game_state["current_index"] += 1
+
+        score = game_state["score"]
+        question_number = question_index + 1
+        total_questions = len(questions)
+
+        # Build response message
+        if explanation and explanation != "N/A":
+            response_text = (
+                f"{result_emoji} *{result_text}*\n\n"
+                f"_{explanation}_\n\n"
+                f"Счет: {score}/{question_number}"
+            )
+        else:
+            response_text = (
+                f"{result_emoji} *{result_text}*\n\n"
+                f"Счет: {score}/{question_number}"
+            )
+
+        # Create "Next" button or "Show Results" button
+        if game_state["current_index"] < total_questions:
+            # More questions to go - show "Next Question" button
+            keyboard = [
+                [InlineKeyboardButton("Следующий вопрос ➡️", callback_data=f"trivia_next_{question_index}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(
+                response_text,
+                parse_mode="Markdown",
+                reply_markup=reply_markup
+            )
+        else:
+            # Last question - show "Show Results" button
+            keyboard = [
+                [InlineKeyboardButton("Показать результаты 🏆", callback_data=f"trivia_next_{question_index}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(
+                response_text,
+                parse_mode="Markdown",
+                reply_markup=reply_markup
+            )
+
+        logger.info(f"User {user_id} answered question {question_number}: {'correct' if is_correct else 'wrong'}")
         return
-
-    questions = game_state["questions"]
-    current_question = questions[question_index]
-    correct_answer = current_question["answer"]
-    explanation = current_question["explanation"]
-
-    # Check if answer is correct
-    is_correct = (user_answer == correct_answer)
-
-    if is_correct:
-        game_state["score"] += 1
-        result_emoji = "✅"
-        result_text = "Правильно!"
-    else:
-        result_emoji = "❌"
-        answer_text = "Правда" if correct_answer else "Ложь"
-        result_text = f"Неправильно! Правильный ответ: {answer_text}."
-
-    # Update current index
-    game_state["current_index"] += 1
-
-    score = game_state["score"]
-    question_number = question_index + 1
-    total_questions = len(questions)
-
-    # Build response message
-    response_text = (
-        f"{result_emoji} *{result_text}*\n\n"
-        f"_{explanation}_\n\n"
-        f"Счет: {score}/{question_number}"
-    )
-
-    # Create "Next" button or "Show Results" button
-    if game_state["current_index"] < total_questions:
-        # More questions to go - show "Next Question" button
-        keyboard = [
-            [InlineKeyboardButton("Следующий вопрос ➡️", callback_data=f"trivia_next_{question_index}")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            response_text,
-            parse_mode="Markdown",
-            reply_markup=reply_markup
-        )
-    else:
-        # Last question - show "Show Results" button
-        keyboard = [
-            [InlineKeyboardButton("Показать результаты 🏆", callback_data=f"trivia_next_{question_index}")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            response_text,
-            parse_mode="Markdown",
-            reply_markup=reply_markup
-        )
-
-    logger.info(f"User {user_id} answered question {question_number}: {'correct' if is_correct else 'wrong'}")
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
