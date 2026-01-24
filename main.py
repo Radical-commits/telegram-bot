@@ -1027,24 +1027,18 @@ async def send_trivia_question(update: Update, context: ContextTypes.DEFAULT_TYP
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # Build question text
-    if question_type == "multiple":
-        # For multiple choice, show options in the message too
-        options_text = "\n".join([f"{chr(65+i)}. {opt}" for i, opt in enumerate(question.get("options", []))])
+    # Build question text (same format for both boolean and multiple choice)
+    # Show only question text, answers are in buttons
+    if question_number > 1:
         question_text = (
             f"*Question {question_number}/{total_questions}*\n\n"
             f"{question['claim']}\n\n"
-            f"{options_text}\n\n"
-            f"_Current score: {score}/{question_number - 1}_" if question_number > 1
-            else f"*Question {question_number}/{total_questions}*\n\n{question['claim']}\n\n{options_text}"
+            f"_Current score: {score}/{question_number - 1}_"
         )
     else:
-        # For boolean, simple format
         question_text = (
             f"*Question {question_number}/{total_questions}*\n\n"
-            f"{question['claim']}\n\n"
-            f"_Current score: {score}/{question_number - 1}_" if question_number > 1
-            else f"*Question {question_number}/{total_questions}*\n\n{question['claim']}"
+            f"{question['claim']}"
         )
 
     # Send question
