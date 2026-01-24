@@ -293,6 +293,95 @@ async def transcribe_audio(file_path: str) -> tuple[bool, str]:
 
 
 @async_retry(max_retries=MAX_RETRIES)
+async def batch_translate_texts(texts: list[str], target_language_code: str) -> tuple[bool, Any]:
+    """
+    Translate multiple texts to the target language in a single Groq API call.
+    More efficient than individual translations for batches.
+
+    Args:
+        texts: List of texts to translate
+        target_language_code: Target language code (e.g., 'es', 'fr')
+
+    Returns:
+        Tuple of (success: bool, result: list[str] or error_message)
+        - On success: (True, list_of_translated_texts)
+        - On failure: (False, error_message)
+    """
+    if not groq_client:
+        logger.error("Groq client is not initialized")
+        return False, "Translation service is not available. Please contact the administrator."
+
+    if not texts:
+        return True, []
+
+    target_language_name = LANGUAGE_NAMES.get(target_language_code, target_language_code)
+
+    try:
+        logger.info(f"Batch translating {len(texts)} texts to {target_language_name}...")
+
+        # Format texts with markers for parsing
+        numbered_texts = "\n".join([f"[{i}] {text}" for i, text in enumerate(texts)])
+
+        # Create chat completion request to Groq with timeout
+        chat_completion = await asyncio.wait_for(
+            groq_client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": f"You are a translator. Translate each numbered item to {target_language_name}. "
+                                   f"Keep the same [N] markers and provide ONLY the translations, one per line. "
+                                   f"Do not add explanations or additional text."
+                    },
+                    {
+                        "role": "user",
+                        "content": numbered_texts
+                    }
+                ],
+                model="llama-3.3-70b-versatile",
+                temperature=0.3,  # Lower temperature for more consistent translations
+                max_tokens=4096,  # Increased for batch translations
+            ),
+            timeout=TRANSLATION_TIMEOUT * 2  # Double timeout for batch
+        )
+
+        response_text = chat_completion.choices[0].message.content.strip()
+
+        # Parse translations back into list
+        translated_texts = []
+        for line in response_text.split('\n'):
+            line = line.strip()
+            if line:
+                # Remove the [N] marker if present
+                if line.startswith('[') and ']' in line:
+                    text = line[line.index(']')+1:].strip()
+                    translated_texts.append(text)
+                else:
+                    translated_texts.append(line)
+
+        # Verify we got the expected number of translations
+        if len(translated_texts) != len(texts):
+            logger.warning(f"Expected {len(texts)} translations but got {len(translated_texts)}")
+            # Pad with original texts if needed
+            while len(translated_texts) < len(texts):
+                translated_texts.append(texts[len(translated_texts)])
+
+        logger.info(f"Batch translation successful: {len(translated_texts)} texts translated")
+        return True, translated_texts[:len(texts)]  # Return only the expected count
+
+    except asyncio.TimeoutError:
+        logger.error(f"Batch translation timeout")
+        return False, f"Batch translation took too long. Please try again."
+
+    except RateLimitError as e:
+        logger.warning(f"Batch translation rate limit: {e}")
+        return False, "Translation service is busy. Please wait a moment and try again."
+
+    except Exception as e:
+        error_type = type(e).__name__
+        logger.error(f"Batch translation failed ({error_type}): {str(e)}")
+        return False, f"Translation error: {error_type}"
+
+
 async def translate_text(text: str, target_language_code: str) -> tuple[bool, str]:
     """
     Translate text to the target language using Groq API.
@@ -862,58 +951,86 @@ async def fetch_opentdb_questions(category_id: int = 0, language_code: str = "en
 
         logger.info(f"Fetched {len(opentdb_results)} questions from OpenTDB")
 
-        # Process and translate questions
-        processed_questions = []
+        # Step 1: Decode HTML entities for all questions and answers
+        decoded_questions = []
+        for q in opentdb_results:
+            decoded_questions.append({
+                "question": html.unescape(q["question"]),
+                "correct_answer": html.unescape(q["correct_answer"]),
+                "incorrect_answers": [html.unescape(ans) for ans in q["incorrect_answers"]],
+                "type": q["type"]
+            })
 
-        for idx, q in enumerate(opentdb_results):
-            try:
-                # Decode HTML entities in question and answers
-                question_text = html.unescape(q["question"])
-                correct_answer = html.unescape(q["correct_answer"])
-                incorrect_answers = [html.unescape(ans) for ans in q["incorrect_answers"]]
-                question_type = q["type"]
+        # Step 2: Batch translate if not English
+        if language_code != "en":
+            # Collect all texts that need translation
+            texts_to_translate = []
+            for q in decoded_questions:
+                texts_to_translate.append(q["question"])
+                if q["type"] == "multiple":
+                    # Add all answers for multiple choice questions
+                    texts_to_translate.append(q["correct_answer"])
+                    texts_to_translate.extend(q["incorrect_answers"])
 
-                # Translate question to target language (only if not English)
-                if language_code != "en":
-                    logger.debug(f"Translating question {idx+1} to {language_name}...")
-                    success, translated_question = await translate_text(question_text, language_code)
-                    if not success:
-                        # If translation fails, use English
-                        logger.warning(f"Translation failed for question {idx+1}, using English")
-                        translated_question = question_text
+            logger.info(f"Batch translating {len(texts_to_translate)} texts...")
+
+            # Translate all texts in one call
+            success, translated_texts = await batch_translate_texts(texts_to_translate, language_code)
+
+            if not success:
+                logger.warning(f"Batch translation failed: {translated_texts}, using English")
+                translated_texts = texts_to_translate  # Fallback to English
+
+            # Map translations back to questions
+            translation_index = 0
+            for q in decoded_questions:
+                if translation_index < len(translated_texts):
+                    q["translated_question"] = translated_texts[translation_index]
+                    translation_index += 1
                 else:
-                    translated_question = question_text
+                    q["translated_question"] = q["question"]
 
-                # Process based on question type
-                if question_type == "boolean":
+                if q["type"] == "multiple":
+                    q["translated_answers"] = []
+                    # Correct answer first
+                    if translation_index < len(translated_texts):
+                        q["translated_answers"].append(translated_texts[translation_index])
+                        translation_index += 1
+                    else:
+                        q["translated_answers"].append(q["correct_answer"])
+
+                    # Then incorrect answers
+                    for _ in q["incorrect_answers"]:
+                        if translation_index < len(translated_texts):
+                            q["translated_answers"].append(translated_texts[translation_index])
+                            translation_index += 1
+                        else:
+                            q["translated_answers"].append(q["incorrect_answers"][len(q["translated_answers"])-1])
+        else:
+            # No translation needed for English
+            for q in decoded_questions:
+                q["translated_question"] = q["question"]
+                if q["type"] == "multiple":
+                    q["translated_answers"] = [q["correct_answer"]] + q["incorrect_answers"]
+
+        # Step 3: Process questions into final format
+        processed_questions = []
+        for idx, q in enumerate(decoded_questions):
+            try:
+                if q["type"] == "boolean":
                     # Boolean question
-                    answer_bool = (correct_answer.lower() == "true")
+                    answer_bool = (q["correct_answer"].lower() == "true")
 
                     processed_questions.append({
-                        "claim": translated_question,
+                        "claim": q["translated_question"],
                         "answer": answer_bool,
                         "type": "boolean",
                         "explanation": "N/A"  # OpenTDB doesn't provide explanations
                     })
 
-                elif question_type == "multiple":
+                elif q["type"] == "multiple":
                     # Multiple choice question
-                    # Combine correct and incorrect answers
-                    all_answers = [correct_answer] + incorrect_answers
-
-                    # Translate all answers (only if not English)
-                    if language_code != "en":
-                        translated_answers = []
-                        for ans in all_answers:
-                            success, translated_ans = await translate_text(ans, language_code)
-                            if success:
-                                translated_answers.append(translated_ans)
-                            else:
-                                # If translation fails, use English
-                                logger.warning(f"Translation failed for answer, using English")
-                                translated_answers.append(ans)
-                    else:
-                        translated_answers = all_answers
+                    translated_answers = q.get("translated_answers", [q["correct_answer"]] + q["incorrect_answers"])
 
                     # Shuffle answers but remember correct answer index
                     # Create list of (answer, is_correct) tuples
@@ -925,7 +1042,7 @@ async def fetch_opentdb_questions(category_id: int = 0, language_code: str = "en
                     correct_index = next(i for i, (_, is_correct) in enumerate(answer_tuples) if is_correct)
 
                     processed_questions.append({
-                        "claim": translated_question,
+                        "claim": q["translated_question"],
                         "answer": correct_index,  # Index of correct answer (0-3)
                         "options": shuffled_answers,  # List of 4 shuffled answers
                         "type": "multiple",
@@ -933,7 +1050,7 @@ async def fetch_opentdb_questions(category_id: int = 0, language_code: str = "en
                     })
 
                 else:
-                    logger.warning(f"Unknown question type: {question_type}")
+                    logger.warning(f"Unknown question type: {q['type']}")
                     continue
 
             except Exception as e:
