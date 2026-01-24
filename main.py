@@ -68,33 +68,33 @@ SUPPORTED_LANGUAGES = {
 }
 
 # OpenTDB Trivia Categories (fetched from https://opentdb.com/api_category.php)
-# Format: {id: name}
+# Format: {id: russian_name}
 TRIVIA_CATEGORIES = {
-    0: "All Categories",  # Special option - no category parameter in API
-    9: "General Knowledge",
-    10: "Entertainment: Books",
-    11: "Entertainment: Film",
-    12: "Entertainment: Music",
-    13: "Entertainment: Musicals & Theatres",
-    14: "Entertainment: Television",
-    15: "Entertainment: Video Games",
-    16: "Entertainment: Board Games",
-    17: "Science & Nature",
-    18: "Science: Computers",
-    19: "Science: Mathematics",
-    20: "Mythology",
-    21: "Sports",
-    22: "Geography",
-    23: "History",
-    24: "Politics",
-    25: "Art",
-    26: "Celebrities",
-    27: "Animals",
-    28: "Vehicles",
-    29: "Entertainment: Comics",
-    30: "Science: Gadgets",
-    31: "Entertainment: Japanese Anime & Manga",
-    32: "Entertainment: Cartoon & Animations",
+    0: "Все категории",  # Special option - no category parameter in API
+    9: "Общие знания",
+    10: "Развлечения: Книги",
+    11: "Развлечения: Кино",
+    12: "Развлечения: Музыка",
+    13: "Развлечения: Мюзиклы и театры",
+    14: "Развлечения: Телевидение",
+    15: "Развлечения: Видеоигры",
+    16: "Развлечения: Настольные игры",
+    17: "Наука и природа",
+    18: "Наука: Компьютеры",
+    19: "Наука: Математика",
+    20: "Мифология",
+    21: "Спорт",
+    22: "География",
+    23: "История",
+    24: "Политика",
+    25: "Искусство",
+    26: "Знаменитости",
+    27: "Животные",
+    28: "Транспорт",
+    29: "Развлечения: Комиксы",
+    30: "Наука: Гаджеты",
+    31: "Развлечения: Японское аниме и манга",
+    32: "Развлечения: Мультфильмы и анимация",
 }
 
 # Language code to full name mapping for Groq translation prompts
@@ -820,34 +820,45 @@ async def fetch_opentdb_questions(category_id: int = 0, language_code: str = "en
             url += f"&category={category_id}"
 
         # Fetch questions from OpenTDB
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(url)
+        # Honor SSL verification settings
+        disable_ssl = os.getenv("DISABLE_SSL_VERIFY", "false").lower() == "true"
 
-            if response.status_code != 200:
-                logger.error(f"OpenTDB API returned status {response.status_code}")
-                return False, f"Failed to fetch questions from trivia database (HTTP {response.status_code})"
+        if disable_ssl:
+            # Create SSL context with verification disabled
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            async with httpx.AsyncClient(timeout=15.0, verify=ssl_context) as client:
+                response = await client.get(url)
+        else:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(url)
 
-            data = response.json()
+        if response.status_code != 200:
+            logger.error(f"OpenTDB API returned status {response.status_code}")
+            return False, f"Failed to fetch questions from trivia database (HTTP {response.status_code})"
 
-            # Check response code
-            response_code = data.get("response_code", -1)
-            if response_code != 0:
-                error_messages = {
-                    1: "No questions found for this category. Try a different category.",
-                    2: "Invalid parameter in request.",
-                    3: "Session token not found.",
-                    4: "All questions exhausted for this category.",
-                    5: "Rate limited. Please wait a few seconds and try again."
-                }
-                error_msg = error_messages.get(response_code, f"Unknown error (code {response_code})")
-                logger.error(f"OpenTDB error: {error_msg}")
-                return False, error_msg
+        data = response.json()
 
-            opentdb_results = data.get("results", [])
+        # Check response code
+        response_code = data.get("response_code", -1)
+        if response_code != 0:
+            error_messages = {
+                1: "No questions found for this category. Try a different category.",
+                2: "Invalid parameter in request.",
+                3: "Session token not found.",
+                4: "All questions exhausted for this category.",
+                5: "Rate limited. Please wait a few seconds and try again."
+            }
+            error_msg = error_messages.get(response_code, f"Unknown error (code {response_code})")
+            logger.error(f"OpenTDB error: {error_msg}")
+            return False, error_msg
 
-            if not opentdb_results:
-                logger.error("OpenTDB returned empty results")
-                return False, "No questions available. Please try again."
+        opentdb_results = data.get("results", [])
+
+        if not opentdb_results:
+            logger.error("OpenTDB returned empty results")
+            return False, "No questions available. Please try again."
 
         logger.info(f"Fetched {len(opentdb_results)} questions from OpenTDB")
 
@@ -1128,26 +1139,18 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         trivia_games.pop(user_id, None)
 
     # Show category selection
-    # Create inline keyboard with category buttons (3 buttons per row)
+    # Create inline keyboard with category buttons (one button per row)
     keyboard = []
 
     # Sort categories by ID
     sorted_categories = sorted(TRIVIA_CATEGORIES.items())
 
-    # Create rows of 2 buttons each for better mobile display
-    for i in range(0, len(sorted_categories), 2):
-        row = []
-        for cat_id, cat_name in sorted_categories[i:i+2]:
-            # Shorten long category names for better button display
-            display_name = cat_name
-            if len(display_name) > 30:
-                display_name = display_name[:27] + "..."
-
-            row.append(InlineKeyboardButton(
-                display_name,
-                callback_data=f"trivia_category_{cat_id}"
-            ))
-        keyboard.append(row)
+    # Create one button per row for better readability
+    for cat_id, cat_name in sorted_categories:
+        keyboard.append([InlineKeyboardButton(
+            cat_name,
+            callback_data=f"trivia_category_{cat_id}"
+        )])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
